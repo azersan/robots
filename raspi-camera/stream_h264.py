@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """
-Hardware-accelerated H264 streaming using Pi's GPU encoder.
-Much faster than MJPEG - expect 25-30 fps on Pi Zero W.
+Hardware-accelerated H264 streaming with multi-client support.
+Single rpicam-vid process shared across all connected clients.
 
-Uses rpicam-vid for encoding, streams via HTTP for easy consumption.
-Client connects to http://<pi-ip>:8080/stream
-
-Note: Requires rpicam-apps to be installed (comes with recent Raspberry Pi OS)
+Uses Pi's GPU encoder - expect 25-30 fps on Pi Zero W.
 """
 
 import subprocess
 import signal
 import sys
 from flask import Flask, Response
-from threading import Thread
-import io
+from threading import Thread, Lock
+import time
 
 app = Flask(__name__)
 
@@ -24,13 +21,40 @@ HEIGHT = 480
 FPS = 30
 BITRATE = 2000000  # 2 Mbps
 
-# Global process handle
+# Shared stream state
+running = True
 rpicam_process = None
+stream_thread = None
 
 
-def start_rpicam():
-    """Start rpicam-vid with H264 encoding to stdout."""
-    global rpicam_process
+class StreamBuffer:
+    """Thread-safe buffer for sharing stream data across clients."""
+
+    def __init__(self, maxsize=30):
+        self.buffer = []
+        self.maxsize = maxsize
+        self.lock = Lock()
+
+    def put(self, chunk):
+        with self.lock:
+            self.buffer.append(chunk)
+            if len(self.buffer) > self.maxsize:
+                self.buffer.pop(0)
+
+    def get_all(self):
+        with self.lock:
+            data = b''.join(self.buffer)
+            self.buffer = []
+            return data
+
+
+# Global buffer for sharing stream
+stream_buffer = StreamBuffer()
+
+
+def stream_reader():
+    """Background thread that reads from rpicam-vid."""
+    global rpicam_process, running
 
     cmd = [
         'rpicam-vid',
@@ -51,22 +75,25 @@ def start_rpicam():
         stderr=subprocess.DEVNULL,
         bufsize=0
     )
-    return rpicam_process
+
+    while running:
+        chunk = rpicam_process.stdout.read(4096)
+        if not chunk:
+            break
+        stream_buffer.put(chunk)
+
+    rpicam_process.terminate()
+    rpicam_process.wait()
 
 
 def generate_h264():
-    """Yield H264 chunks from rpicam-vid."""
-    proc = start_rpicam()
-
-    try:
-        while True:
-            chunk = proc.stdout.read(4096)
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        proc.terminate()
-        proc.wait()
+    """Yield H264 chunks to client."""
+    while running:
+        data = stream_buffer.get_all()
+        if data:
+            yield data
+        else:
+            time.sleep(0.01)
 
 
 @app.route('/')
@@ -74,16 +101,15 @@ def index():
     return '''
     <html>
     <head><title>Pi H264 Stream</title></head>
-    <body style="margin:0;background:#000">
-        <video autoplay muted playsinline style="width:100%;height:100vh;object-fit:contain">
-            <source src="/stream" type="video/h264">
-        </video>
-        <script>
-            // Fallback message
-            document.querySelector('video').onerror = function() {
-                document.body.innerHTML = '<p style="color:white;padding:20px">H264 stream running at /stream<br>Use VLC or OpenCV to view</p>';
-            };
-        </script>
+    <body style="margin:0;background:#000;color:#fff;padding:20px">
+        <h1>H264 Stream (Multi-Client)</h1>
+        <p>Stream running at /stream</p>
+        <p>Supports multiple simultaneous viewers</p>
+        <p>View with:</p>
+        <ul>
+            <li>VLC: vlc http://&lt;pi-ip&gt;:8080/stream</li>
+            <li>OpenCV: python3 local_cv_h264.py</li>
+        </ul>
     </body>
     </html>
     '''
@@ -98,8 +124,9 @@ def stream():
 
 
 def cleanup(sig, frame):
-    global rpicam_process
+    global running, rpicam_process
     print("\nShutting down...")
+    running = False
     if rpicam_process:
         rpicam_process.terminate()
         rpicam_process.wait()
@@ -110,13 +137,13 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 
-    print(f"Starting H264 stream at http://0.0.0.0:8080")
+    # Start stream reader in background
+    stream_thread = Thread(target=stream_reader, daemon=True)
+    stream_thread.start()
+
+    print(f"Starting H264 stream at http://0.0.0.0:8080 (multi-client)")
     print(f"Resolution: {WIDTH}x{HEIGHT} @ {FPS}fps")
     print(f"Bitrate: {BITRATE//1000}kbps")
-    print()
-    print("View options:")
-    print("  - VLC: vlc http://<pi-ip>:8080/stream")
-    print("  - OpenCV: See local_cv_h264.py")
     print()
 
     app.run(host='0.0.0.0', port=8080, threaded=True)
