@@ -22,6 +22,20 @@ STREAM_URL = f"http://{PI_HOST}:8080/stream"
 CONFIDENCE_THRESHOLD = 0.5
 MODEL_SIZE = "n"  # n=nano (fastest), s=small, m=medium, l=large, x=extra large
 
+# Class filtering - set ONE of these (leave other empty)
+# Use class names from COCO dataset (see list below)
+INCLUDE_CLASSES = []
+EXCLUDE_CLASSES = ["tv", "laptop", "mouse", "remote", "keyboard", "cell phone"]
+
+# Common COCO classes for reference:
+# People: person
+# Vehicles: bicycle, car, motorcycle, airplane, bus, train, truck, boat
+# Animals: bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe
+# Electronics: tv, laptop, mouse, remote, keyboard, cell phone
+# Furniture: chair, couch, bed, dining table, toilet
+# Kitchen: bottle, wine glass, cup, fork, knife, spoon, bowl
+# Food: banana, apple, sandwich, orange, broccoli, carrot, hot dog, pizza, donut, cake
+
 
 def create_side_panel(detections, fps, inference_ms, frame_height):
     """Create an info panel showing detection stats."""
@@ -70,11 +84,14 @@ def create_side_panel(detections, fps, inference_ms, frame_height):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
 
     # Instructions at bottom
-    y_offset = frame_height - 60
+    y_offset = frame_height - 80
     cv2.putText(panel, "Controls:", (10, y_offset),
                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
     y_offset += 20
-    cv2.putText(panel, "q - quit  s - screenshot", (10, y_offset),
+    cv2.putText(panel, "r - reconnect (fix lag)", (10, y_offset),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
+    y_offset += 20
+    cv2.putText(panel, "s - screenshot  q - quit", (10, y_offset),
                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
 
     return panel
@@ -100,6 +117,12 @@ def draw_detections(frame, results):
 
             # Skip low confidence detections
             if conf < CONFIDENCE_THRESHOLD:
+                continue
+
+            # Apply class filtering
+            if INCLUDE_CLASSES and label not in INCLUDE_CLASSES:
+                continue
+            if EXCLUDE_CLASSES and label in EXCLUDE_CLASSES:
                 continue
 
             # Generate consistent color for this class
@@ -196,6 +219,11 @@ def main():
             filename = f"yolo_screenshot_{int(time.time())}.jpg"
             cv2.imwrite(filename, display)
             print(f"Saved {filename}")
+        elif key == ord('r'):
+            print("Reconnecting to clear lag...")
+            cap.release()
+            cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     cap.release()
     cv2.destroyAllWindows()
