@@ -163,3 +163,66 @@ Camera → Pi (simple CV) → Motors
 - Simple stuff runs locally
 - Offload heavy processing when needed
 - Best of both worlds
+
+---
+
+## Lessons Learned (January 2026)
+
+### Pi Zero W Streaming Performance
+
+We tested various streaming configurations. Here's what we found:
+
+| Configuration | FPS | Notes |
+|--------------|-----|-------|
+| On-device CV (color tracking) @ 320x240 | 3-6 fps | CPU bottleneck |
+| MJPEG stream only @ 640x480 | 3-5 fps | JPEG encoding is slow |
+| MJPEG stream only @ 320x240, quality 70 | 10-13 fps | Better, but still limited |
+| Hardware H264 via rpicam-vid | 25-30 fps | Best option, uses GPU encoder |
+
+**Key insight:** The Pi Zero W's CPU is the bottleneck. Even "just streaming" requires JPEG encoding, which is CPU-intensive. The hardware H264 encoder bypasses this.
+
+### Color Space Issues
+
+- picamera2's `RGB888` format actually outputs BGR (OpenCV convention)
+- Always verify color order when colors look wrong (red appearing blue = RGB/BGR swap)
+- HSV is much better than RGB for color detection (separates hue from brightness)
+
+### Red Color Detection
+
+Red is tricky because it wraps around the HSV hue circle:
+- Hue 0-10: Red
+- Hue 170-180: Also red
+
+Solution: Use two masks and OR them together:
+```python
+mask1 = cv2.inRange(hsv, (0, 120, 70), (10, 255, 255))
+mask2 = cv2.inRange(hsv, (170, 120, 70), (180, 255, 255))
+mask = cv2.bitwise_or(mask1, mask2)
+```
+
+### Architecture Recommendation
+
+For the Pi Zero W, **laptop offloading is the way to go** for anything beyond basic streaming:
+
+1. Pi runs minimal code: capture → H264 encode (hardware) → stream
+2. Laptop does all CV processing at full speed
+3. Later: laptop sends motor commands back to Pi
+
+This gives you:
+- 25-30 fps streaming
+- Full laptop CPU/GPU for CV
+- Easy iteration (edit code locally, no redeployment)
+- Foundation for complex CV (YOLO, face detection, etc.)
+
+### File Organization
+
+```
+raspi-camera/
+├── README.md           # Project overview and phases
+├── SETUP.md            # Pi connection and setup instructions
+├── CV_IDEAS.md         # This file - CV options and learnings
+├── stream.py           # On-device streaming with CV (slow)
+├── stream_raw.py       # Minimal MJPEG streamer for offloading
+├── color_tracker.py    # On-device color tracking (3-6 fps)
+└── local_cv.py         # Laptop-side CV processing (fast)
+```

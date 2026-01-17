@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 Minimal MJPEG streaming server - no CV processing.
-Runs fast on Pi Zero W, offloads processing to client.
+Optimized for Pi Zero W: lower resolution and JPEG quality for faster encoding.
+Offloads all processing to client.
+
+Performance: ~10-13 fps on Pi Zero W
+For better performance, use stream_h264.py (hardware encoding, 25-30 fps)
 """
 
 from flask import Flask, Response
@@ -15,9 +19,9 @@ camera = None
 def init_camera():
     global camera
     camera = Picamera2()
-    # Higher resolution since we're not doing CV on Pi
+    # Lower resolution = faster JPEG encoding on Pi Zero W
     config = camera.create_video_configuration(
-        main={"size": (640, 480), "format": "RGB888"}
+        main={"size": (320, 240), "format": "RGB888"}
     )
     camera.configure(config)
     camera.start()
@@ -27,8 +31,8 @@ def generate_frames():
     """Stream raw frames as fast as possible."""
     while True:
         frame = camera.capture_array()
-        # Just encode and send - no processing
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        # Lower quality = faster encoding
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
