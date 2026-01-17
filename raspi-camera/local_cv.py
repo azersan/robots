@@ -22,7 +22,7 @@ RED_LOWER1 = np.array([0, 120, 70])
 RED_UPPER1 = np.array([10, 255, 255])
 RED_LOWER2 = np.array([170, 120, 70])
 RED_UPPER2 = np.array([180, 255, 255])
-MIN_AREA = 1000  # Larger since we're at 640x480
+MIN_AREA = 500  # For 320x240 stream
 
 
 def process_frame(frame):
@@ -144,8 +144,9 @@ def main():
         cv2.putText(frame, status, (10, 50),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
 
-        # Show frame
-        cv2.imshow("Pi Camera - Local CV", frame)
+        # Upscale for display (stream is 320x240 for performance)
+        display = cv2.resize(frame, (640, 480))
+        cv2.imshow("Pi Camera - Local CV", display)
 
         # Handle keyboard
         key = cv2.waitKey(1) & 0xFF
