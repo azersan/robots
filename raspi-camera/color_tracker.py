@@ -120,7 +120,12 @@ def index():
             }
             h1 { margin-bottom: 10px; }
             p { color: #888; margin-bottom: 20px; }
-            img { max-width: 100%; border: 2px solid #333; }
+            img {
+                width: 640px;
+                height: 480px;
+                border: 2px solid #333;
+                image-rendering: auto;
+            }
         </style>
     </head>
     <body>
