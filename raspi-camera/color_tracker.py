@@ -9,7 +9,7 @@ from flask import Flask, Response
 from picamera2 import Picamera2
 import cv2
 import numpy as np
-import io
+import time
 
 app = Flask(__name__)
 camera = None
@@ -24,6 +24,9 @@ RED_UPPER2 = np.array([180, 255, 255])
 # Minimum blob size to track (filters noise)
 MIN_AREA = 500
 
+# Debug mode - show mask overlay
+DEBUG = True
+
 
 def init_camera():
     global camera
@@ -37,7 +40,7 @@ def init_camera():
 
 
 def process_frame(frame):
-    """Detect red blobs and draw tracking circle."""
+    """Detect red blobs and draw tracking circle. Returns frame and mask."""
     # Convert to HSV
     hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
 
@@ -54,11 +57,13 @@ def process_frame(frame):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     # Track the largest red blob
+    detected = False
     if contours:
         largest = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(largest)
 
         if area > MIN_AREA:
+            detected = True
             # Get bounding circle
             ((x, y), radius) = cv2.minEnclosingCircle(largest)
 
@@ -77,11 +82,15 @@ def process_frame(frame):
                 cv2.putText(frame, text, (cx + 10, cy - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-    return frame
+    return frame, mask, detected
 
 
 def generate_frames():
     """Generator that yields processed MJPEG frames."""
+    fps_time = time.time()
+    fps_count = 0
+    fps = 0
+
     while True:
         # Capture frame as numpy array (picamera2 RGB888 is actually BGR)
         frame = camera.capture_array()
@@ -90,7 +99,32 @@ def generate_frames():
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         # Process for color tracking
-        frame = process_frame(frame)
+        frame, mask, detected = process_frame(frame)
+
+        # Calculate FPS
+        fps_count += 1
+        if time.time() - fps_time >= 1.0:
+            fps = fps_count
+            fps_count = 0
+            fps_time = time.time()
+
+        # Add debug overlay
+        if DEBUG:
+            # Create small mask preview (80x60)
+            mask_small = cv2.resize(mask, (80, 60))
+            mask_color = cv2.cvtColor(mask_small, cv2.COLOR_GRAY2RGB)
+            # Add border
+            cv2.rectangle(mask_color, (0, 0), (79, 59), (0, 255, 0), 1)
+            # Overlay in top-right corner
+            frame[5:65, 235:315] = mask_color
+
+        # Draw FPS and status
+        status = "TRACKING" if detected else "SEARCHING"
+        color = (0, 255, 0) if detected else (255, 100, 100)
+        cv2.putText(frame, f"FPS: {fps}", (5, 15),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        cv2.putText(frame, status, (5, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
         # Encode as JPEG (convert back to BGR for OpenCV encoding)
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
