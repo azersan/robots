@@ -83,16 +83,17 @@ def process_frame(frame):
 def generate_frames():
     """Generator that yields processed MJPEG frames."""
     while True:
-        # Capture frame as numpy array
+        # Capture frame as numpy array (picamera2 RGB888 is actually BGR)
         frame = camera.capture_array()
+
+        # Convert BGR to RGB for correct display and HSV processing
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         # Process for color tracking
         frame = process_frame(frame)
 
-        # Convert to BGR for JPEG encoding (OpenCV expects BGR)
+        # Encode as JPEG (convert back to BGR for OpenCV encoding)
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
-        # Encode as JPEG
         _, buffer = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
         frame_bytes = buffer.tobytes()
 
