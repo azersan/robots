@@ -38,7 +38,6 @@ GESTURE_NAMES = [
     'OPEN PALM',
     'ROCK ON',
     'CALL ME',
-    'FOUR',
 ]
 
 
@@ -108,11 +107,8 @@ def detect_hand_gesture(landmarks, handedness: str) -> Tuple[str, Tuple[int, int
     if index_up and middle_up and fingers_up == 2 and not thumb_up:
         return "PEACE", (255, 0, 255)  # Magenta
 
-    if fingers_up == 4 and thumb_up:
-        return "OPEN PALM", (0, 255, 255)  # Yellow - stop signal
-
-    if fingers_up == 4 and not thumb_up:
-        return "FOUR", (255, 165, 0)  # Orange
+    if fingers_up == 4:
+        return "OPEN PALM", (0, 255, 255)  # Yellow - stop signal (thumb optional)
 
     if pinky_up and index_up and not middle_up and not ring_up:
         return "ROCK ON", (128, 0, 255)  # Purple

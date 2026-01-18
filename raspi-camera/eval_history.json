@@ -86,5 +86,27 @@
     },
     "commit_hash": "74ce4bf",
     "commit_msg": "Fix capture mode and add initial test cases"
+  },
+  {
+    "timestamp": "2026-01-18 10:34",
+    "accuracy": 0.9259259259259259,
+    "total": 27,
+    "correct": 25,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 11
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 8
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 6
+      }
+    },
+    "commit_hash": "3d17afa",
+    "commit_msg": "Document gesture eval framework and learnings"
   }
 ]
