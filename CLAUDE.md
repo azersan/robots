@@ -36,6 +36,9 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 **Mac-side (run locally):**
 - `raspi-camera/local_cv_h264.py` - H264 stream consumer with color tracking and side panel UI
 - `raspi-camera/local_cv.py` - MJPEG stream consumer
+- `raspi-camera/local_yolo.py` - YOLOv8 object detection with class filtering
+- `raspi-camera/local_pose.py` - Body pose detection with gesture recognition
+- `raspi-camera/local_hands.py` - Hand gesture detection
 
 ## Common Commands
 
@@ -54,8 +57,17 @@ python3 stream_raw.py             # Fallback: MJPEG at 10-13fps
 ### Run Local CV (on Mac)
 ```bash
 cd raspi-camera
-python3 local_cv_h264.py          # For H264 stream
-python3 local_cv.py               # For MJPEG stream
+python3 local_cv_h264.py          # Color tracking (H264)
+python3 local_yolo.py             # YOLOv8 object detection
+python3 local_pose.py             # Body pose / gesture detection
+python3 local_hands.py            # Hand gesture detection
+python3 local_cv.py               # Color tracking (MJPEG fallback)
+```
+
+### Install Dependencies (on Mac)
+```bash
+cd raspi-camera
+pip3 install -r requirements.txt
 ```
 
 ### Find Pi on Network
@@ -63,6 +75,32 @@ python3 local_cv.py               # For MJPEG stream
 ping pibot.local
 arp -a | grep b8:27:eb            # Pi MAC prefix
 ```
+
+## CV Capabilities
+
+**Color Tracking** (`local_cv_h264.py`)
+- HSV-based red blob detection
+- Shows mask view and tracking info
+
+**Object Detection** (`local_yolo.py`)
+- YOLOv8-nano model (80 COCO classes)
+- Configurable class filtering (INCLUDE_CLASSES / EXCLUDE_CLASSES)
+- Detection smoothing to reduce flicker
+
+**Body Pose** (`local_pose.py`)
+- MediaPipe Pose Landmarker (33 body points)
+- Gesture recognition: STOP, TURN LEFT/RIGHT, POINT LEFT/RIGHT
+- Gesture log with deduplication
+
+**Hand Gestures** (`local_hands.py`)
+- MediaPipe Hand Landmarker (21 points per hand)
+- Gestures: FIST, THUMBS UP, POINTING, PEACE, OPEN PALM
+- Supports up to 2 hands
+
+**Common Controls (all apps):**
+- `r` - Reconnect (clears stream lag)
+- `s` - Screenshot
+- `q` - Quit
 
 ## Performance Notes
 
