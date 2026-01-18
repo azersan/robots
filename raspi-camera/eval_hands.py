@@ -2,16 +2,83 @@
 """
 Evaluation runner for hand gesture detection.
 Loads test cases and reports accuracy metrics.
+Tracks results over time in eval_history.json.
 
 Usage:
     python3 eval_hands.py              # Run all tests
     python3 eval_hands.py --verbose    # Show all results, not just failures
+    python3 eval_hands.py --history    # Show evaluation history
+    python3 eval_hands.py --no-save    # Run without saving to history
 """
 
 import os
 import json
 import argparse
+import subprocess
+from datetime import datetime
 from gesture_hands import detect_hand_gesture, dict_to_landmarks
+
+HISTORY_FILE = "eval_history.json"
+
+
+def get_git_info():
+    """Get current git commit hash and message."""
+    try:
+        commit_hash = subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+        commit_msg = subprocess.check_output(
+            ['git', 'log', '-1', '--format=%s'],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+        return commit_hash, commit_msg
+    except Exception:
+        return None, None
+
+
+def load_history(script_dir):
+    """Load evaluation history from file."""
+    history_path = os.path.join(script_dir, HISTORY_FILE)
+    if os.path.exists(history_path):
+        with open(history_path) as f:
+            return json.load(f)
+    return []
+
+
+def save_history(script_dir, history):
+    """Save evaluation history to file."""
+    history_path = os.path.join(script_dir, HISTORY_FILE)
+    with open(history_path, 'w') as f:
+        json.dump(history, f, indent=2)
+
+
+def show_history(history, limit=10):
+    """Display evaluation history."""
+    if not history:
+        print("No evaluation history yet.")
+        return
+
+    print(f"\n{'='*60}")
+    print("Evaluation History (recent first)")
+    print(f"{'='*60}\n")
+
+    for entry in reversed(history[-limit:]):
+        timestamp = entry.get('timestamp', 'unknown')
+        accuracy = entry.get('accuracy', 0)
+        total = entry.get('total', 0)
+        correct = entry.get('correct', 0)
+        commit = entry.get('commit_hash', 'unknown')
+        commit_msg = entry.get('commit_msg', '')[:40]
+
+        print(f"{timestamp}  {accuracy:5.1%} ({correct}/{total})  [{commit}] {commit_msg}")
+
+        # Show per-gesture if available
+        if 'per_gesture' in entry:
+            for gesture, stats in sorted(entry['per_gesture'].items()):
+                g_acc = stats['correct'] / stats['total'] if stats['total'] > 0 else 0
+                print(f"    {gesture:15} {stats['correct']}/{stats['total']} ({g_acc:.0%})")
+        print()
 
 
 def load_test_cases(test_dir):
@@ -105,24 +172,64 @@ def run_eval(cases, verbose=False):
         print("All tests passed!")
 
     print()
-    return accuracy
+
+    # Return detailed results for history tracking
+    return {
+        'accuracy': accuracy,
+        'total': total,
+        'correct': correct_count,
+        'per_gesture': gesture_stats,
+        'failures': [{'id': r['id'], 'expected': r['expected'], 'predicted': r['predicted']}
+                     for r in failures]
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate hand gesture detection")
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Show all results, not just failures')
+    parser.add_argument('--history', action='store_true',
+                       help='Show evaluation history')
+    parser.add_argument('--no-save', action='store_true',
+                       help='Run without saving to history')
     args = parser.parse_args()
 
-    # Find test data directory
+    # Find directories
     script_dir = os.path.dirname(os.path.abspath(__file__))
     test_dir = os.path.join(script_dir, "test_data", "hands")
+
+    # Show history if requested
+    if args.history:
+        history = load_history(script_dir)
+        show_history(history)
+        return
 
     print(f"Loading test cases from: {test_dir}")
     cases = load_test_cases(test_dir)
     print(f"Found {len(cases)} test cases")
 
-    run_eval(cases, verbose=args.verbose)
+    results = run_eval(cases, verbose=args.verbose)
+
+    if results and not args.no_save:
+        # Get git info
+        commit_hash, commit_msg = get_git_info()
+
+        # Create history entry
+        entry = {
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M'),
+            'accuracy': results['accuracy'],
+            'total': results['total'],
+            'correct': results['correct'],
+            'per_gesture': results['per_gesture'],
+            'commit_hash': commit_hash,
+            'commit_msg': commit_msg,
+        }
+
+        # Load existing history and append
+        history = load_history(script_dir)
+        history.append(entry)
+        save_history(script_dir, history)
+        print(f"Results saved to {HISTORY_FILE}")
 
 
 if __name__ == '__main__':

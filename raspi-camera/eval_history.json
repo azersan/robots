@@ -1,0 +1,90 @@
+[
+  {
+    "timestamp": "2026-01-18 10:18",
+    "accuracy": 0.4074074074074074,
+    "total": 27,
+    "correct": 11,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 7
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 4
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 0
+      }
+    },
+    "commit_hash": "74ce4bf",
+    "commit_msg": "Fix capture mode and add initial test cases"
+  },
+  {
+    "timestamp": "2026-01-18 10:23",
+    "accuracy": 0.5555555555555556,
+    "total": 27,
+    "correct": 15,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 7
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 4
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 4
+      }
+    },
+    "commit_hash": "74ce4bf",
+    "commit_msg": "Fix capture mode and add initial test cases"
+  },
+  {
+    "timestamp": "2026-01-18 10:26",
+    "accuracy": 0.6296296296296297,
+    "total": 27,
+    "correct": 17,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 11
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 2
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 4
+      }
+    },
+    "commit_hash": "74ce4bf",
+    "commit_msg": "Fix capture mode and add initial test cases"
+  },
+  {
+    "timestamp": "2026-01-18 10:28",
+    "accuracy": 0.7037037037037037,
+    "total": 27,
+    "correct": 19,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 11
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 2
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 6
+      }
+    },
+    "commit_hash": "74ce4bf",
+    "commit_msg": "Fix capture mode and add initial test cases"
+  }
+]

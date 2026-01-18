@@ -43,16 +43,33 @@ GESTURE_NAMES = [
 
 
 def is_finger_extended(landmarks, tip_idx: int, mcp_idx: int) -> bool:
-    """Check if a finger is extended (tip above mcp in y)."""
-    return landmarks[tip_idx].y < landmarks[mcp_idx].y
+    """Check if a finger is extended (tip clearly above mcp in y).
+
+    Requires a minimum distance to avoid false positives from slight variations.
+    """
+    diff = landmarks[mcp_idx].y - landmarks[tip_idx].y
+    return diff > 0.03  # Require at least 3% of frame height
 
 
 def is_thumb_extended(landmarks) -> bool:
-    """Check if thumb is extended (away from palm)."""
+    """Check if thumb is extended (away from palm).
+
+    Checks both horizontal (thumb out to side) and vertical (thumbs up/down).
+    For horizontal extension, thumb must not be curled under the palm.
+    """
     thumb_tip = landmarks[THUMB_TIP]
     index_mcp = landmarks[INDEX_MCP]
-    # Thumb is extended if tip is far from index mcp horizontally
-    return abs(thumb_tip.x - index_mcp.x) > 0.1
+
+    # Vertical distance: positive means thumb is above index MCP
+    vert_dist = index_mcp.y - thumb_tip.y
+
+    # Horizontal: thumb out to the side, but not curled under palm
+    horiz_extended = abs(thumb_tip.x - index_mcp.x) > 0.1 and vert_dist >= -0.02
+
+    # Vertical: thumb up (tip clearly above index MCP)
+    vert_extended = vert_dist > 0.1
+
+    return horiz_extended or vert_extended
 
 
 def detect_hand_gesture(landmarks, handedness: str) -> Tuple[str, Tuple[int, int, int]]:
