@@ -233,6 +233,22 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.45
 # Minimum finger spread for OPEN PALM (distinguishes from relaxed hand)
 MIN_FINGER_SPREAD = 0.052
 
+# Gesture-specific thresholds
+MIN_FINGER_RATIO_OPEN_PALM = 0.98  # All fingers must be very straight
+MIN_INDEX_RATIO_POINTING = 0.99   # Index must be very extended for pointing
+MAX_CURLED_RATIO_ROCK_ON = 0.75   # Middle/ring must be clearly curled
+MAX_AVG_RATIO_FIST = 0.70         # Average finger ratio for fist
+
+
+def get_all_finger_ratios(landmarks) -> Dict[str, float]:
+    """Get straightness ratios for all four fingers."""
+    return {
+        'index': get_straightness_ratio(landmarks, *FINGER_JOINTS['index']),
+        'middle': get_straightness_ratio(landmarks, *FINGER_JOINTS['middle']),
+        'ring': get_straightness_ratio(landmarks, *FINGER_JOINTS['ring']),
+        'pinky': get_straightness_ratio(landmarks, *FINGER_JOINTS['pinky']),
+    }
+
 
 def get_finger_spread(landmarks) -> float:
     """Calculate average distance between adjacent fingertips.
@@ -283,6 +299,10 @@ def detect_hand_gesture(landmarks, handedness: str,
     color = (200, 200, 200)
     confidence = 0.0
 
+    # Get finger ratios for additional checks
+    ratios = get_all_finger_ratios(landmarks)
+    avg_ratio = sum(ratios.values()) / 4
+
     if fingers_up == 0 and not thumb_up:
         gesture = "FIST"
         color = (0, 0, 255)  # Red
@@ -294,9 +314,11 @@ def detect_hand_gesture(landmarks, handedness: str,
         confidence = gesture_confidence(thumb_conf, index_conf, middle_conf, ring_conf, pinky_conf)
 
     elif index_up and fingers_up == 1 and not thumb_up:
-        gesture = "POINTING"
-        color = (255, 255, 0)  # Cyan
-        confidence = gesture_confidence(thumb_conf, index_conf, middle_conf, ring_conf, pinky_conf)
+        # POINTING: require index to be very clearly extended
+        if ratios['index'] >= MIN_INDEX_RATIO_POINTING:
+            gesture = "POINTING"
+            color = (255, 255, 0)  # Cyan
+            confidence = gesture_confidence(thumb_conf, index_conf, middle_conf, ring_conf, pinky_conf)
 
     elif index_up and middle_up and fingers_up == 2 and not thumb_up:
         gesture = "PEACE"
@@ -306,15 +328,19 @@ def detect_hand_gesture(landmarks, handedness: str,
     elif fingers_up == 4:
         # Check if fingers are spread (not just a relaxed open hand)
         spread = get_finger_spread(landmarks)
-        if spread >= MIN_FINGER_SPREAD:
+        min_ratio = min(ratios.values())
+        # Require both spread AND all fingers very straight
+        if spread >= MIN_FINGER_SPREAD and min_ratio >= MIN_FINGER_RATIO_OPEN_PALM:
             gesture = "OPEN PALM"
             color = (0, 255, 255)  # Yellow
             confidence = gesture_confidence(index_conf, middle_conf, ring_conf, pinky_conf)
 
     elif pinky_up and index_up and not middle_up and not ring_up:
-        gesture = "ROCK ON"
-        color = (128, 0, 255)  # Purple
-        confidence = gesture_confidence(index_conf, middle_conf, ring_conf, pinky_conf)
+        # ROCK ON: require middle and ring to be clearly curled
+        if ratios['middle'] < MAX_CURLED_RATIO_ROCK_ON and ratios['ring'] < MAX_CURLED_RATIO_ROCK_ON:
+            gesture = "ROCK ON"
+            color = (128, 0, 255)  # Purple
+            confidence = gesture_confidence(index_conf, middle_conf, ring_conf, pinky_conf)
 
     elif thumb_up and pinky_up and not index_up and not middle_up and not ring_up:
         gesture = "CALL ME"
