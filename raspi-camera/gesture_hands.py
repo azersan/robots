@@ -119,12 +119,12 @@ def landmarks_to_dict(landmarks) -> List[Dict[str, float]]:
         entry = {
             'x': float(lm.x),
             'y': float(lm.y),
-            'z': float(lm.z) if hasattr(lm, 'z') else 0.0,
+            'z': float(lm.z) if hasattr(lm, 'z') and lm.z is not None else 0.0,
         }
-        # Include presence/visibility if available
-        if hasattr(lm, 'presence'):
+        # Include presence/visibility if available and not None
+        if hasattr(lm, 'presence') and lm.presence is not None:
             entry['presence'] = float(lm.presence)
-        if hasattr(lm, 'visibility'):
+        if hasattr(lm, 'visibility') and lm.visibility is not None:
             entry['visibility'] = float(lm.visibility)
         result.append(entry)
     return result

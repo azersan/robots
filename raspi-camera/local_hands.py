@@ -258,15 +258,10 @@ def main():
     global capture_selected_gesture
 
     # Parse video source arguments with capture mode
-    args = video_source.parse_args(description="Hand gesture detection")
-
-    # Add capture mode argument
-    import argparse
-    parser = argparse.ArgumentParser(add_help=False)
+    parser = video_source.create_parser(description="Hand gesture detection")
     parser.add_argument('--capture', action='store_true',
                        help='Enable test case capture mode')
-    capture_args, _ = parser.parse_known_args()
-    args.capture = capture_args.capture
+    args = video_source.parse_args(parser=parser)
 
     if args.capture:
         print("CAPTURE MODE: Press 1-8 to select gesture, 'c' to capture")

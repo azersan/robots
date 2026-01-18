@@ -20,8 +20,11 @@ DEFAULT_PORT = 8080
 DEFAULT_STREAM_PATH = "/stream"
 
 
-def parse_args(description="CV app"):
-    """Parse command-line arguments for video source selection."""
+def create_parser(description="CV app"):
+    """Create an argument parser with video source options.
+
+    Apps can add their own arguments before calling parse_args().
+    """
     parser = argparse.ArgumentParser(description=description)
 
     parser.add_argument(
@@ -40,6 +43,19 @@ def parse_args(description="CV app"):
         default=DEFAULT_PORT,
         help=f'Stream port for remote sources (default: {DEFAULT_PORT})'
     )
+
+    return parser
+
+
+def parse_args(description="CV app", parser=None):
+    """Parse command-line arguments for video source selection.
+
+    Args:
+        description: App description for help text
+        parser: Optional pre-configured parser (from create_parser with extra args)
+    """
+    if parser is None:
+        parser = create_parser(description)
 
     args = parser.parse_args()
 
