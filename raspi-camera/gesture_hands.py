@@ -56,6 +56,7 @@ GESTURE_NAMES = [
     'OPEN PALM',
     'ROCK ON',
     'CALL ME',
+    'NONE',  # For testing false positives - hand visible but no specific gesture
 ]
 
 

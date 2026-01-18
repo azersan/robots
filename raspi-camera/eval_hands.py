@@ -16,7 +16,10 @@ import json
 import argparse
 import subprocess
 from datetime import datetime
-from gesture_hands import detect_hand_gesture, dict_to_landmarks
+from gesture_hands import detect_hand_gesture, dict_to_landmarks, GESTURE_NAMES
+
+# Defined gestures (excluding NONE which is for false positive testing)
+DEFINED_GESTURES = [g for g in GESTURE_NAMES if g != 'NONE']
 
 HISTORY_FILE = "eval_history.json"
 
@@ -116,7 +119,12 @@ def run_eval(cases, verbose=False):
         # Run detection
         predicted, _ = detect_hand_gesture(landmarks, case['handedness'])
         expected = case['expected_gesture']
-        correct = (predicted == expected)
+
+        # For NONE cases, correct if predicted is NOT a defined gesture
+        if expected == 'NONE':
+            correct = (predicted not in DEFINED_GESTURES)
+        else:
+            correct = (predicted == expected)
 
         results.append({
             'id': case['id'],
