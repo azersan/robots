@@ -166,7 +166,14 @@ python3 eval_hands.py --history
 **Thresholds (current values in gesture_hands.py):**
 - Thumb horizontal extension: `abs(thumb_tip.x - index_mcp.x) > 0.1`
 - Thumb vertical extension: `index_mcp.y - thumb_tip.y > 0.1`
-- Finger extension: `mcp.y - tip.y > 0.03`
+- Finger straightness: `direct_distance / segment_sum > 0.9`
+
+**Finger straightness detection:**
+- Original approach (tip above MCP) only works for fingers pointing UP
+- New approach: compare direct MCP→TIP distance vs sum of joint segments
+- Ratio of 1.0 = perfectly straight, <0.8 = bent
+- Direction-agnostic: works for pointing down, forward, sideways
+- Key insight: a straight finger has joints aligned regardless of orientation
 
 ## Hardware (Future)
 
