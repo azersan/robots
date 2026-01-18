@@ -29,6 +29,24 @@ MIDDLE_MCP = 9
 RING_MCP = 13
 PINKY_MCP = 17
 
+# Additional joints for straightness detection
+INDEX_PIP = 6
+INDEX_DIP = 7
+MIDDLE_PIP = 10
+MIDDLE_DIP = 11
+RING_PIP = 14
+RING_DIP = 15
+PINKY_PIP = 18
+PINKY_DIP = 19
+
+# Finger joint mappings: (MCP, PIP, DIP, TIP)
+FINGER_JOINTS = {
+    'index': (INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP),
+    'middle': (MIDDLE_MCP, MIDDLE_PIP, MIDDLE_DIP, MIDDLE_TIP),
+    'ring': (RING_MCP, RING_PIP, RING_DIP, RING_TIP),
+    'pinky': (PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP),
+}
+
 # Recognized gestures (for capture mode menu)
 GESTURE_NAMES = [
     'THUMBS UP',
@@ -41,13 +59,56 @@ GESTURE_NAMES = [
 ]
 
 
-def is_finger_extended(landmarks, tip_idx: int, mcp_idx: int) -> bool:
-    """Check if a finger is extended (tip clearly above mcp in y).
+def _distance(lm1, lm2) -> float:
+    """Calculate 2D distance between two landmarks."""
+    return ((lm1.x - lm2.x)**2 + (lm1.y - lm2.y)**2)**0.5
 
-    Requires a minimum distance to avoid false positives from slight variations.
+
+def is_finger_straight(landmarks, mcp: int, pip: int, dip: int, tip: int) -> bool:
+    """Check if a finger is straightened by comparing direct distance to segment sum.
+
+    This is direction-agnostic: works for pointing up, down, forward, etc.
+    A straight finger has ratio close to 1.0, a bent finger has lower ratio.
     """
+    # Direct distance from MCP to TIP
+    direct = _distance(landmarks[mcp], landmarks[tip])
+
+    # Sum of segments: MCP->PIP + PIP->DIP + DIP->TIP
+    segments = (
+        _distance(landmarks[mcp], landmarks[pip]) +
+        _distance(landmarks[pip], landmarks[dip]) +
+        _distance(landmarks[dip], landmarks[tip])
+    )
+
+    if segments < 0.01:  # Avoid division by zero
+        return False
+
+    ratio = direct / segments
+    return ratio > 0.9  # Threshold: 0.9 = straight finger
+
+
+def is_finger_extended(landmarks, tip_idx: int, mcp_idx: int) -> bool:
+    """Check if a finger is extended using straightness detection.
+
+    Uses joint alignment to detect extension regardless of pointing direction.
+    Falls back to y-position check for additional robustness.
+    """
+    # Map tip index to finger name
+    finger_map = {
+        INDEX_TIP: 'index',
+        MIDDLE_TIP: 'middle',
+        RING_TIP: 'ring',
+        PINKY_TIP: 'pinky',
+    }
+
+    finger = finger_map.get(tip_idx)
+    if finger and finger in FINGER_JOINTS:
+        mcp, pip, dip, tip = FINGER_JOINTS[finger]
+        return is_finger_straight(landmarks, mcp, pip, dip, tip)
+
+    # Fallback to original y-position check
     diff = landmarks[mcp_idx].y - landmarks[tip_idx].y
-    return diff > 0.03  # Require at least 3% of frame height
+    return diff > 0.03
 
 
 def is_thumb_extended(landmarks) -> bool:

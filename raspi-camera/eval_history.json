@@ -108,5 +108,83 @@
     },
     "commit_hash": "3d17afa",
     "commit_msg": "Document gesture eval framework and learnings"
+  },
+  {
+    "timestamp": "2026-01-18 10:44",
+    "accuracy": 0.7272727272727273,
+    "total": 44,
+    "correct": 32,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 11
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 8
+      },
+      "POINTING": {
+        "total": 17,
+        "correct": 7
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 6
+      }
+    },
+    "commit_hash": "4e10453",
+    "commit_msg": "Add pointing direction line for POINTING gesture"
+  },
+  {
+    "timestamp": "2026-01-18 12:04",
+    "accuracy": 0.8636363636363636,
+    "total": 44,
+    "correct": 38,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 10
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 9
+      },
+      "POINTING": {
+        "total": 17,
+        "correct": 14
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 5
+      }
+    },
+    "commit_hash": "4e10453",
+    "commit_msg": "Add pointing direction line for POINTING gesture"
+  },
+  {
+    "timestamp": "2026-01-18 12:05",
+    "accuracy": 0.9318181818181818,
+    "total": 44,
+    "correct": 41,
+    "per_gesture": {
+      "FIST": {
+        "total": 11,
+        "correct": 11
+      },
+      "OPEN PALM": {
+        "total": 9,
+        "correct": 9
+      },
+      "POINTING": {
+        "total": 17,
+        "correct": 15
+      },
+      "THUMBS UP": {
+        "total": 7,
+        "correct": 6
+      }
+    },
+    "commit_hash": "4e10453",
+    "commit_msg": "Add pointing direction line for POINTING gesture"
   }
 ]
