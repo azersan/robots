@@ -7,6 +7,10 @@ Usage:
     python3 local_hands.py              # Default: Pi stream
     python3 local_hands.py --local      # Use Mac webcam
     python3 local_hands.py --source IP  # Pi at specific IP
+
+Capture mode (for building test cases):
+    python3 local_hands.py --local --capture
+    # Press 1-7 to select expected gesture, 'c' to capture
 """
 
 import cv2
@@ -17,7 +21,11 @@ from mediapipe.tasks.python import vision
 import time
 import urllib.request
 import os
+import json
 import video_source
+from gesture_hands import (
+    detect_hand_gesture, landmarks_to_dict, GESTURE_NAMES
+)
 
 # Model path
 MODEL_PATH = "hand_landmarker.task"
@@ -30,17 +38,9 @@ last_log_time = 0
 gesture_flash_until = 0
 MIN_LOG_INTERVAL = 2.0
 
-# Hand landmark indices
-WRIST = 0
-THUMB_TIP = 4
-INDEX_TIP = 8
-MIDDLE_TIP = 12
-RING_TIP = 16
-PINKY_TIP = 20
-INDEX_MCP = 5  # Base of index finger
-MIDDLE_MCP = 9
-RING_MCP = 13
-PINKY_MCP = 17
+# Capture mode state
+capture_selected_gesture = None
+capture_count = 0
 
 
 def download_model():
@@ -49,66 +49,6 @@ def download_model():
         print(f"Downloading hand model...")
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
         print("Model downloaded!")
-
-
-def is_finger_extended(landmarks, tip_idx, mcp_idx):
-    """Check if a finger is extended (tip above mcp in y)."""
-    return landmarks[tip_idx].y < landmarks[mcp_idx].y
-
-
-def is_thumb_extended(landmarks):
-    """Check if thumb is extended (away from palm)."""
-    # Thumb is extended if tip is far from index mcp
-    thumb_tip = landmarks[THUMB_TIP]
-    index_mcp = landmarks[INDEX_MCP]
-    wrist = landmarks[WRIST]
-
-    # Calculate horizontal distance
-    return abs(thumb_tip.x - index_mcp.x) > 0.1
-
-
-def detect_hand_gesture(landmarks, handedness):
-    """Analyze hand landmarks and return detected gesture."""
-    if not landmarks or len(landmarks) < 21:
-        return "NO HAND", (128, 128, 128)
-
-    # Check which fingers are extended
-    thumb_up = is_thumb_extended(landmarks)
-    index_up = is_finger_extended(landmarks, INDEX_TIP, INDEX_MCP)
-    middle_up = is_finger_extended(landmarks, MIDDLE_TIP, MIDDLE_MCP)
-    ring_up = is_finger_extended(landmarks, RING_TIP, RING_MCP)
-    pinky_up = is_finger_extended(landmarks, PINKY_TIP, PINKY_MCP)
-
-    fingers_up = sum([index_up, middle_up, ring_up, pinky_up])
-
-    # Gesture recognition
-    if fingers_up == 0 and not thumb_up:
-        return "FIST", (0, 0, 255)  # Red
-
-    if thumb_up and fingers_up == 0:
-        return "THUMBS UP", (0, 255, 0)  # Green
-
-    if index_up and fingers_up == 1 and not thumb_up:
-        return "POINTING", (255, 255, 0)  # Cyan
-
-    if index_up and middle_up and fingers_up == 2 and not thumb_up:
-        return "PEACE", (255, 0, 255)  # Magenta
-
-    if fingers_up == 4 and thumb_up:
-        return "OPEN PALM", (0, 255, 255)  # Yellow - stop signal
-
-    if fingers_up == 4 and not thumb_up:
-        return "FOUR", (255, 165, 0)  # Orange
-
-    if pinky_up and index_up and not middle_up and not ring_up:
-        return "ROCK ON", (128, 0, 255)  # Purple
-
-    if thumb_up and pinky_up and not index_up and not middle_up and not ring_up:
-        return "CALL ME", (0, 200, 200)  # Teal
-
-    # Count fingers
-    count = fingers_up + (1 if thumb_up else 0)
-    return f"{count} FINGERS", (200, 200, 200)
 
 
 def log_gesture(gesture):
@@ -134,6 +74,41 @@ def log_gesture(gesture):
         return True
 
     return False
+
+
+def save_test_case(landmarks, handedness, frame, expected_gesture):
+    """Save a test case for evaluation."""
+    global capture_count
+
+    # Create test data directory if needed
+    test_dir = os.path.join(os.path.dirname(__file__), "test_data", "hands")
+    os.makedirs(test_dir, exist_ok=True)
+
+    # Generate case ID
+    gesture_slug = expected_gesture.lower().replace(" ", "_")
+    case_id = f"{gesture_slug}_{capture_count:03d}"
+    case_dir = os.path.join(test_dir, case_id)
+    os.makedirs(case_dir, exist_ok=True)
+
+    # Save screenshot
+    screenshot_path = os.path.join(case_dir, "screenshot.jpg")
+    cv2.imwrite(screenshot_path, frame)
+
+    # Save case data
+    case_data = {
+        "id": case_id,
+        "expected_gesture": expected_gesture,
+        "handedness": handedness,
+        "landmarks": landmarks_to_dict(landmarks),
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    case_path = os.path.join(case_dir, "case.json")
+    with open(case_path, 'w') as f:
+        json.dump(case_data, f, indent=2)
+
+    capture_count += 1
+    print(f"Saved test case: {case_id}")
+    return case_id
 
 
 def draw_hand_landmarks(frame, landmarks, handedness):
@@ -172,7 +147,7 @@ def draw_hand_landmarks(frame, landmarks, handedness):
     return frame
 
 
-def create_side_panel(gesture, gesture_color, fps, inference_ms, frame_height, is_flashing, num_hands):
+def create_side_panel(gesture, gesture_color, fps, inference_ms, frame_height, is_flashing, num_hands, capture_mode=False):
     """Create info panel showing gesture and stats."""
     panel_width = 280
     panel = np.zeros((frame_height, panel_width, 3), dtype=np.uint8)
@@ -181,8 +156,10 @@ def create_side_panel(gesture, gesture_color, fps, inference_ms, frame_height, i
     y_offset = 30
 
     # Title
-    cv2.putText(panel, "Hand Detection", (10, y_offset),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    title = "CAPTURE MODE" if capture_mode else "Hand Detection"
+    title_color = (0, 200, 255) if capture_mode else (255, 255, 255)
+    cv2.putText(panel, title, (10, y_offset),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, title_color, 2)
     y_offset += 30
 
     cv2.putText(panel, f"Hands: {num_hands}", (10, y_offset),
@@ -206,15 +183,47 @@ def create_side_panel(gesture, gesture_color, fps, inference_ms, frame_height, i
                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
     y_offset += 35
 
-    # Gesture log
-    cv2.putText(panel, "Gesture Log:", (10, y_offset),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 100), 1)
-    y_offset += 22
+    if capture_mode:
+        # Capture mode: show gesture selection menu
+        cv2.putText(panel, "Select gesture (1-8):", (10, y_offset),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+        y_offset += 22
 
-    for timestamp, logged_gesture in reversed(gesture_log[-6:]):
-        cv2.putText(panel, f"{timestamp} {logged_gesture}", (10, y_offset),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
-        y_offset += 18
+        for i, name in enumerate(GESTURE_NAMES):
+            key = i + 1
+            is_selected = (capture_selected_gesture == name)
+            if is_selected:
+                cv2.rectangle(panel, (5, y_offset - 14), (panel_width - 5, y_offset + 4),
+                             (0, 100, 0), -1)
+            color = (0, 255, 0) if is_selected else (180, 180, 180)
+            cv2.putText(panel, f"{key}. {name}", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+            y_offset += 18
+
+        y_offset += 10
+        if capture_selected_gesture:
+            cv2.putText(panel, f"Ready: {capture_selected_gesture}", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            y_offset += 20
+            cv2.putText(panel, "Press 'c' to capture", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+        else:
+            cv2.putText(panel, "Select a gesture first", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
+
+        y_offset += 30
+        cv2.putText(panel, f"Captured: {capture_count}", (10, y_offset),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1)
+    else:
+        # Normal mode: show gesture log
+        cv2.putText(panel, "Gesture Log:", (10, y_offset),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 100), 1)
+        y_offset += 22
+
+        for timestamp, logged_gesture in reversed(gesture_log[-6:]):
+            cv2.putText(panel, f"{timestamp} {logged_gesture}", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
+            y_offset += 18
 
     # Gesture guide at bottom
     y_offset = frame_height - 120
@@ -235,15 +244,32 @@ def create_side_panel(gesture, gesture_color, fps, inference_ms, frame_height, i
         y_offset += 16
 
     y_offset += 5
-    cv2.putText(panel, "r-reconnect s-screenshot q-quit", (10, y_offset),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
+    if capture_mode:
+        cv2.putText(panel, "c-capture r-reconnect q-quit", (10, y_offset),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
+    else:
+        cv2.putText(panel, "r-reconnect s-screenshot q-quit", (10, y_offset),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
 
     return panel
 
 
 def main():
-    # Parse video source arguments
+    global capture_selected_gesture
+
+    # Parse video source arguments with capture mode
     args = video_source.parse_args(description="Hand gesture detection")
+
+    # Add capture mode argument
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--capture', action='store_true',
+                       help='Enable test case capture mode')
+    capture_args, _ = parser.parse_known_args()
+    args.capture = capture_args.capture
+
+    if args.capture:
+        print("CAPTURE MODE: Press 1-8 to select gesture, 'c' to capture")
 
     # Download model if needed
     download_model()
@@ -306,13 +332,15 @@ def main():
         gesture = "NO HAND"
         gesture_color = (128, 128, 128)
         num_hands = len(results.hand_landmarks) if results.hand_landmarks else 0
+        current_landmarks = None
+        current_handedness = "Unknown"
 
         if results.hand_landmarks:
             # Use the first detected hand
-            landmarks = results.hand_landmarks[0]
-            handedness = results.handedness[0][0].category_name if results.handedness else "Unknown"
+            current_landmarks = results.hand_landmarks[0]
+            current_handedness = results.handedness[0][0].category_name if results.handedness else "Unknown"
 
-            gesture, gesture_color = detect_hand_gesture(landmarks, handedness)
+            gesture, gesture_color = detect_hand_gesture(current_landmarks, current_handedness)
 
             # Draw all detected hands
             for i, hand_landmarks in enumerate(results.hand_landmarks):
@@ -343,7 +371,8 @@ def main():
 
         # Create side panel
         panel = create_side_panel(gesture, gesture_color, fps, inference_ms,
-                                  frame.shape[0], is_flashing, num_hands)
+                                  frame.shape[0], is_flashing, num_hands,
+                                  capture_mode=args.capture)
 
         # Concatenate horizontally
         display = np.hstack([frame, panel])
@@ -361,6 +390,20 @@ def main():
         elif key == ord('r'):
             print("Reconnecting...")
             cap = video_source.reconnect(args, cap)
+        elif args.capture and ord('1') <= key <= ord('8'):
+            # Select gesture for capture
+            idx = key - ord('1')
+            if idx < len(GESTURE_NAMES):
+                capture_selected_gesture = GESTURE_NAMES[idx]
+                print(f"Selected: {capture_selected_gesture}")
+        elif args.capture and key == ord('c'):
+            # Capture current frame
+            if capture_selected_gesture and current_landmarks:
+                save_test_case(current_landmarks, current_handedness, frame, capture_selected_gesture)
+            elif not capture_selected_gesture:
+                print("Select a gesture first (1-8)")
+            else:
+                print("No hand detected - show your hand and try again")
 
     landmarker.close()
     cap.release()
