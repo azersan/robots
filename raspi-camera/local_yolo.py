@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """
-YOLOv8 object detection on Pi camera stream - runs on your Mac.
-Pulls H264 video from Pi and runs YOLO inference locally.
+YOLOv8 object detection - runs on your Mac.
+Supports local webcam or remote Pi stream.
 
 Usage:
-    python3 local_yolo.py              # Use default Pi address
-    python3 local_yolo.py 192.168.4.80 # Specify Pi address
+    python3 local_yolo.py              # Default: Pi stream
+    python3 local_yolo.py --local      # Use Mac webcam
+    python3 local_yolo.py --source IP  # Pi at specific IP
 """
 
 import cv2
 import numpy as np
 import time
-import sys
 from ultralytics import YOLO
-
-# Pi stream URL
-PI_HOST = sys.argv[1] if len(sys.argv) > 1 else "192.168.4.80"
-STREAM_URL = f"http://{PI_HOST}:8080/stream"
+import video_source
 
 # YOLO settings
 CONFIDENCE_THRESHOLD = 0.5
@@ -237,6 +234,9 @@ def draw_detections(frame, detections):
 
 
 def main():
+    # Parse video source arguments
+    args = video_source.parse_args(description="YOLOv8 object detection")
+
     print(f"Loading YOLOv8{MODEL_SIZE} model...")
     model = YOLO(f"yolov8{MODEL_SIZE}.pt")
     print("Model loaded!")
@@ -245,17 +245,16 @@ def main():
     # Initialize detection tracker for smoothing
     tracker = DetectionTracker(persistence_frames=PERSISTENCE_FRAMES)
 
-    print(f"Connecting to Pi H264 stream at {STREAM_URL}")
-    print("Press 'q' to quit, 's' to save screenshot")
+    # Open video source
+    cap = video_source.get_capture(args)
+    source_desc = video_source.get_source_description(args)
+    print("Press 'q' to quit, 's' to save screenshot, 'r' to reconnect")
     print()
 
-    # Open video stream
-    cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
     if not cap.isOpened():
-        print(f"ERROR: Could not connect to {STREAM_URL}")
-        print("Make sure the Pi is running stream_h264.py")
+        print(f"ERROR: Could not open video source")
+        if not video_source.is_local(args):
+            print("Make sure the Pi is running stream_h264.py")
         return
 
     print("Connected! Stream should appear shortly...")
@@ -270,10 +269,8 @@ def main():
         ret, frame = cap.read()
         if not ret:
             print("Lost connection, reconnecting...")
-            cap.release()
             time.sleep(1)
-            cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap = video_source.reconnect(args, cap)
             continue
 
         # Run YOLO inference
@@ -301,7 +298,7 @@ def main():
         # Concatenate horizontally
         display = np.hstack([frame, panel])
 
-        cv2.imshow("Pi Camera - YOLOv8 Detection", display)
+        cv2.imshow(f"YOLOv8 Detection - {source_desc}", display)
 
         # Handle keyboard
         key = cv2.waitKey(1) & 0xFF
@@ -312,10 +309,8 @@ def main():
             cv2.imwrite(filename, display)
             print(f"Saved {filename}")
         elif key == ord('r'):
-            print("Reconnecting to clear lag...")
-            cap.release()
-            cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            print("Reconnecting...")
+            cap = video_source.reconnect(args, cap)
 
     cap.release()
     cv2.destroyAllWindows()

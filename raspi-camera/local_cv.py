@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """
-Local CV processing - runs on your Mac.
-Pulls video from Pi and does all processing locally.
+Color tracking (MJPEG version) - runs on your Mac.
+Supports local webcam or remote Pi stream.
 
 Usage:
-    python3 local_cv.py              # Use default Pi address
-    python3 local_cv.py 192.168.4.80 # Specify Pi address
+    python3 local_cv.py              # Default: Pi stream
+    python3 local_cv.py --local      # Use Mac webcam
+    python3 local_cv.py --source IP  # Pi at specific IP
 """
 
 import cv2
 import numpy as np
 import time
-import sys
-
-# Pi stream URL
-PI_HOST = sys.argv[1] if len(sys.argv) > 1 else "192.168.4.80"
-STREAM_URL = f"http://{PI_HOST}:8080/stream"
+import video_source
 
 # Color tracking settings
 RED_LOWER1 = np.array([0, 120, 70])
@@ -146,16 +143,19 @@ def create_side_panel(mask, tracking, fps):
 
 
 def main():
-    print(f"Connecting to Pi stream at {STREAM_URL}")
-    print("Press 'q' to quit, 's' to save screenshot")
+    # Parse video source arguments
+    args = video_source.parse_args(description="Color tracking (MJPEG)")
+
+    # Open video source
+    cap = video_source.get_capture(args)
+    source_desc = video_source.get_source_description(args)
+    print("Press 'q' to quit, 's' to save screenshot, 'r' to reconnect")
     print()
 
-    # Open video stream
-    cap = cv2.VideoCapture(STREAM_URL)
-
     if not cap.isOpened():
-        print(f"ERROR: Could not connect to {STREAM_URL}")
-        print("Make sure the Pi is running stream_raw.py or stream_h264.py")
+        print(f"ERROR: Could not open video source")
+        if not video_source.is_local(args):
+            print("Make sure the Pi is running stream_raw.py or stream_h264.py")
         return
 
     # FPS tracking
@@ -167,9 +167,8 @@ def main():
         ret, frame = cap.read()
         if not ret:
             print("Lost connection, reconnecting...")
-            cap.release()
             time.sleep(1)
-            cap = cv2.VideoCapture(STREAM_URL)
+            cap = video_source.reconnect(args, cap)
             continue
 
         # Process frame
@@ -194,7 +193,7 @@ def main():
         # Concatenate horizontally
         display = np.hstack([frame_large, panel_large])
 
-        cv2.imshow("Pi Camera - Local CV", display)
+        cv2.imshow(f"Color Tracking MJPEG - {source_desc}", display)
 
         # Handle keyboard
         key = cv2.waitKey(1) & 0xFF
@@ -204,6 +203,9 @@ def main():
             filename = f"screenshot_{int(time.time())}.jpg"
             cv2.imwrite(filename, display)
             print(f"Saved {filename}")
+        elif key == ord('r'):
+            print("Reconnecting...")
+            cap = video_source.reconnect(args, cap)
 
     cap.release()
     cv2.destroyAllWindows()

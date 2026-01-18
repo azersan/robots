@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """
-Local CV processing for H264 streams - runs on your Mac.
-Pulls H264 video from Pi and does all processing locally.
+Color tracking with local CV processing.
+Supports local webcam or remote Pi stream.
 
 Usage:
-    python3 local_cv_h264.py              # Use default Pi address
-    python3 local_cv_h264.py 192.168.4.80 # Specify Pi address
+    python3 local_cv_h264.py              # Default: Pi stream
+    python3 local_cv_h264.py --local      # Use Mac webcam
+    python3 local_cv_h264.py --source IP  # Pi at specific IP
 """
 
 import cv2
 import numpy as np
 import time
-import sys
-
-# Pi stream URL
-PI_HOST = sys.argv[1] if len(sys.argv) > 1 else "192.168.4.80"
-STREAM_URL = f"http://{PI_HOST}:8080/stream"
+import video_source
 
 # Color tracking settings
 RED_LOWER1 = np.array([0, 120, 70])
@@ -148,24 +145,19 @@ def create_side_panel(mask, tracking, fps, frame_height):
 
 
 def main():
-    print(f"Connecting to Pi H264 stream at {STREAM_URL}")
-    print("Press 'q' to quit, 's' to save screenshot")
+    # Parse video source arguments
+    args = video_source.parse_args(description="Color tracking")
+
+    # Open video source
+    cap = video_source.get_capture(args)
+    source_desc = video_source.get_source_description(args)
+    print("Press 'q' to quit, 's' to save screenshot, 'r' to reconnect")
     print()
 
-    # Open video stream with H264 decode hints
-    cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-
-    # Set buffer size to reduce latency
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
     if not cap.isOpened():
-        print(f"ERROR: Could not connect to {STREAM_URL}")
-        print("Make sure the Pi is running stream_h264.py")
-        print()
-        print("Troubleshooting:")
-        print("  1. Check Pi is reachable: ping " + PI_HOST)
-        print("  2. Test with VLC: vlc " + STREAM_URL)
-        print("  3. Check stream is running on Pi")
+        print(f"ERROR: Could not open video source")
+        if not video_source.is_local(args):
+            print("Make sure the Pi is running stream_h264.py")
         return
 
     print("Connected! Stream should appear shortly...")
@@ -179,10 +171,8 @@ def main():
         ret, frame = cap.read()
         if not ret:
             print("Lost connection, reconnecting...")
-            cap.release()
             time.sleep(1)
-            cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap = video_source.reconnect(args, cap)
             continue
 
         # Process frame
@@ -201,7 +191,7 @@ def main():
         # Concatenate horizontally
         display = np.hstack([frame, panel])
 
-        cv2.imshow("Pi Camera - H264 Local CV", display)
+        cv2.imshow(f"Color Tracking - {source_desc}", display)
 
         # Handle keyboard
         key = cv2.waitKey(1) & 0xFF
@@ -211,6 +201,9 @@ def main():
             filename = f"screenshot_{int(time.time())}.jpg"
             cv2.imwrite(filename, display)
             print(f"Saved {filename}")
+        elif key == ord('r'):
+            print("Reconnecting...")
+            cap = video_source.reconnect(args, cap)
 
     cap.release()
     cv2.destroyAllWindows()

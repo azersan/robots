@@ -34,11 +34,12 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 - `raspi-camera/stream.py` - On-device CV streaming (slow, ~3-6 fps)
 
 **Mac-side (run locally):**
-- `raspi-camera/local_cv_h264.py` - H264 stream consumer with color tracking and side panel UI
-- `raspi-camera/local_cv.py` - MJPEG stream consumer
+- `raspi-camera/video_source.py` - Shared module for video input (webcam or Pi stream)
+- `raspi-camera/local_cv_h264.py` - Color tracking
 - `raspi-camera/local_yolo.py` - YOLOv8 object detection with class filtering
 - `raspi-camera/local_pose.py` - Body pose detection with gesture recognition
 - `raspi-camera/local_hands.py` - Hand gesture detection
+- `raspi-camera/local_cv.py` - Color tracking (MJPEG fallback)
 
 ## Common Commands
 
@@ -57,11 +58,20 @@ python3 stream_raw.py             # Fallback: MJPEG at 10-13fps
 ### Run Local CV (on Mac)
 ```bash
 cd raspi-camera
-python3 local_cv_h264.py          # Color tracking (H264)
-python3 local_yolo.py             # YOLOv8 object detection
-python3 local_pose.py             # Body pose / gesture detection
-python3 local_hands.py            # Hand gesture detection
-python3 local_cv.py               # Color tracking (MJPEG fallback)
+
+# Default: connect to Pi stream at 192.168.4.80
+python3 local_yolo.py
+python3 local_pose.py
+python3 local_hands.py
+python3 local_cv_h264.py
+
+# Use Mac's built-in webcam for testing
+python3 local_yolo.py --local
+python3 local_pose.py -l          # -l is shorthand for --local
+
+# Connect to Pi at different IP
+python3 local_yolo.py --source 10.0.0.5
+python3 local_yolo.py -s 10.0.0.5 # -s is shorthand for --source
 ```
 
 ### Install Dependencies (on Mac)

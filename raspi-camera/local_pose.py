@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 Body pose detection and gesture recognition using MediaPipe.
-Runs on your Mac, pulls H264 video from Pi.
+Supports local webcam or remote Pi stream.
 
 Usage:
-    python3 local_pose.py              # Use default Pi address
-    python3 local_pose.py 192.168.4.80 # Specify Pi address
+    python3 local_pose.py              # Default: Pi stream
+    python3 local_pose.py --local      # Use Mac webcam
+    python3 local_pose.py --source IP  # Pi at specific IP
 """
 
 import cv2
@@ -14,13 +15,9 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import time
-import sys
 import urllib.request
 import os
-
-# Pi stream URL
-PI_HOST = sys.argv[1] if len(sys.argv) > 1 else "192.168.4.80"
-STREAM_URL = f"http://{PI_HOST}:8080/stream"
+import video_source
 
 # Model path
 MODEL_PATH = "pose_landmarker_lite.task"
@@ -231,6 +228,9 @@ def create_side_panel(gesture, gesture_color, fps, inference_ms, frame_height, i
 
 
 def main():
+    # Parse video source arguments
+    args = video_source.parse_args(description="Body pose detection")
+
     # Download model if needed
     download_model()
 
@@ -247,17 +247,16 @@ def main():
     )
     landmarker = vision.PoseLandmarker.create_from_options(options)
 
-    print(f"Connecting to Pi H264 stream at {STREAM_URL}")
+    # Open video source
+    cap = video_source.get_capture(args)
+    source_desc = video_source.get_source_description(args)
     print("Press 'q' to quit, 's' to save screenshot, 'r' to reconnect")
     print()
 
-    # Open video stream
-    cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
     if not cap.isOpened():
-        print(f"ERROR: Could not connect to {STREAM_URL}")
-        print("Make sure the Pi is running stream_h264.py")
+        print(f"ERROR: Could not open video source")
+        if not video_source.is_local(args):
+            print("Make sure the Pi is running stream_h264.py")
         return
 
     print("Connected! Try some gestures:")
@@ -277,10 +276,8 @@ def main():
         ret, frame = cap.read()
         if not ret:
             print("Lost connection, reconnecting...")
-            cap.release()
             time.sleep(1)
-            cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap = video_source.reconnect(args, cap)
             continue
 
         # Convert to RGB for MediaPipe
@@ -329,7 +326,7 @@ def main():
         # Concatenate horizontally
         display = np.hstack([frame, panel])
 
-        cv2.imshow("Pi Camera - Pose Detection", display)
+        cv2.imshow(f"Pose Detection - {source_desc}", display)
 
         # Handle keyboard
         key = cv2.waitKey(1) & 0xFF
@@ -340,10 +337,8 @@ def main():
             cv2.imwrite(filename, display)
             print(f"Saved {filename}")
         elif key == ord('r'):
-            print("Reconnecting to clear lag...")
-            cap.release()
-            cap = cv2.VideoCapture(STREAM_URL, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            print("Reconnecting...")
+            cap = video_source.reconnect(args, cap)
 
     landmarker.close()
     cap.release()
