@@ -21,6 +21,7 @@ STREAM_URL = f"http://{PI_HOST}:8080/stream"
 # YOLO settings
 CONFIDENCE_THRESHOLD = 0.5
 MODEL_SIZE = "n"  # n=nano (fastest), s=small, m=medium, l=large, x=extra large
+PERSISTENCE_FRAMES = 5  # Keep detections visible for N frames after disappearing
 
 # Class filtering - set ONE of these (leave other empty)
 # Use class names from COCO dataset (see list below)
@@ -35,6 +36,78 @@ EXCLUDE_CLASSES = ["tv", "laptop", "mouse", "remote", "keyboard", "cell phone"]
 # Furniture: chair, couch, bed, dining table, toilet
 # Kitchen: bottle, wine glass, cup, fork, knife, spoon, bowl
 # Food: banana, apple, sandwich, orange, broccoli, carrot, hot dog, pizza, donut, cake
+
+
+class DetectionTracker:
+    """Tracks detections across frames to reduce flickering."""
+
+    def __init__(self, persistence_frames=5, iou_threshold=0.3):
+        self.persistence_frames = persistence_frames
+        self.iou_threshold = iou_threshold
+        self.tracked = {}  # key -> {detection, last_seen, age}
+        self.frame_count = 0
+
+    def _iou(self, box1, box2):
+        """Calculate intersection over union of two boxes."""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        inter = max(0, x2 - x1) * max(0, y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = area1 + area2 - inter
+
+        return inter / union if union > 0 else 0
+
+    def _find_match(self, detection):
+        """Find existing tracked detection that matches this one."""
+        best_key = None
+        best_iou = self.iou_threshold
+
+        for key, tracked in self.tracked.items():
+            if tracked['detection']['label'] != detection['label']:
+                continue
+            iou = self._iou(tracked['detection']['box'], detection['box'])
+            if iou > best_iou:
+                best_iou = iou
+                best_key = key
+
+        return best_key
+
+    def update(self, detections):
+        """Update tracker with new detections, return smoothed detections."""
+        self.frame_count += 1
+        matched_keys = set()
+
+        # Match new detections to existing tracks
+        for det in detections:
+            match_key = self._find_match(det)
+            if match_key:
+                # Update existing track
+                self.tracked[match_key]['detection'] = det
+                self.tracked[match_key]['last_seen'] = self.frame_count
+                matched_keys.add(match_key)
+            else:
+                # Create new track
+                new_key = f"{det['label']}_{self.frame_count}_{id(det)}"
+                self.tracked[new_key] = {
+                    'detection': det,
+                    'last_seen': self.frame_count
+                }
+                matched_keys.add(new_key)
+
+        # Remove old tracks that have expired
+        expired = []
+        for key, tracked in self.tracked.items():
+            if self.frame_count - tracked['last_seen'] > self.persistence_frames:
+                expired.append(key)
+        for key in expired:
+            del self.tracked[key]
+
+        # Return all active detections
+        return [t['detection'] for t in self.tracked.values()]
 
 
 def create_side_panel(detections, fps, inference_ms, frame_height):
@@ -97,8 +170,8 @@ def create_side_panel(detections, fps, inference_ms, frame_height):
     return panel
 
 
-def draw_detections(frame, results):
-    """Draw bounding boxes and labels on frame, return detection info."""
+def extract_detections(results):
+    """Extract detection info from YOLO results."""
     detections = []
 
     for result in results:
@@ -129,26 +202,38 @@ def draw_detections(frame, results):
             np.random.seed(cls_id)
             color = tuple(int(c) for c in np.random.randint(100, 255, 3))
 
-            # Draw box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-            # Draw label background
-            label_text = f"{label} {conf:.0%}"
-            (w, h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(frame, (x1, y1 - h - 10), (x1 + w + 10, y1), color, -1)
-
-            # Draw label text
-            cv2.putText(frame, label_text, (x1 + 5, y1 - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
             detections.append({
                 'label': label,
                 'confidence': conf,
                 'color': color,
-                'box': (x1, y1, x2, y2)
+                'box': (x1, y1, x2, y2),
+                'cls_id': cls_id
             })
 
-    return frame, detections
+    return detections
+
+
+def draw_detections(frame, detections):
+    """Draw bounding boxes and labels on frame."""
+    for det in detections:
+        x1, y1, x2, y2 = det['box']
+        color = det['color']
+        label = det['label']
+        conf = det['confidence']
+
+        # Draw box
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+        # Draw label background
+        label_text = f"{label} {conf:.0%}"
+        (w, h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(frame, (x1, y1 - h - 10), (x1 + w + 10, y1), color, -1)
+
+        # Draw label text
+        cv2.putText(frame, label_text, (x1 + 5, y1 - 5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    return frame
 
 
 def main():
@@ -156,6 +241,9 @@ def main():
     model = YOLO(f"yolov8{MODEL_SIZE}.pt")
     print("Model loaded!")
     print()
+
+    # Initialize detection tracker for smoothing
+    tracker = DetectionTracker(persistence_frames=PERSISTENCE_FRAMES)
 
     print(f"Connecting to Pi H264 stream at {STREAM_URL}")
     print("Press 'q' to quit, 's' to save screenshot")
@@ -193,8 +281,12 @@ def main():
         results = model(frame, verbose=False)
         inference_ms = (time.time() - inference_start) * 1000
 
+        # Extract and track detections (smooths flickering)
+        raw_detections = extract_detections(results)
+        detections = tracker.update(raw_detections)
+
         # Draw detections
-        frame, detections = draw_detections(frame, results)
+        frame = draw_detections(frame, detections)
 
         # Calculate FPS
         fps_count += 1
