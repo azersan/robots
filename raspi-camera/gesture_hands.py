@@ -233,6 +233,9 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.45
 # Minimum finger spread for OPEN PALM (distinguishes from relaxed hand)
 MIN_FINGER_SPREAD = 0.052
 
+# Maximum z-spread for OPEN PALM (palm must face camera, not side view)
+MAX_Z_SPREAD_OPEN_PALM = 0.03
+
 # Gesture-specific thresholds
 MIN_FINGER_RATIO_OPEN_PALM = 0.98  # All fingers must be very straight
 MIN_INDEX_RATIO_POINTING = 0.99   # Index must be very extended for pointing
@@ -261,6 +264,17 @@ def get_finger_spread(landmarks) -> float:
     for i in range(len(tips) - 1):
         total += _distance(landmarks[tips[i]], landmarks[tips[i + 1]])
     return total / 3  # Average of 3 gaps
+
+
+def get_fingertip_z_spread(landmarks) -> float:
+    """Calculate z-depth spread across fingertips.
+
+    Low values indicate palm facing camera (all fingertips at similar depth).
+    High values indicate side view (fingertips at varying depths).
+    """
+    tips = [THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP]
+    z_coords = [landmarks[t].z for t in tips]
+    return max(z_coords) - min(z_coords)
 
 
 def detect_hand_gesture(landmarks, handedness: str,
@@ -329,8 +343,11 @@ def detect_hand_gesture(landmarks, handedness: str,
         # Check if fingers are spread (not just a relaxed open hand)
         spread = get_finger_spread(landmarks)
         min_ratio = min(ratios.values())
-        # Require both spread AND all fingers very straight
-        if spread >= MIN_FINGER_SPREAD and min_ratio >= MIN_FINGER_RATIO_OPEN_PALM:
+        z_spread = get_fingertip_z_spread(landmarks)
+        # Require: spread fingers, all very straight, AND palm facing camera (low z-spread)
+        if (spread >= MIN_FINGER_SPREAD and
+            min_ratio >= MIN_FINGER_RATIO_OPEN_PALM and
+            z_spread <= MAX_Z_SPREAD_OPEN_PALM):
             gesture = "OPEN PALM"
             color = (0, 255, 255)  # Yellow
             confidence = gesture_confidence(index_conf, middle_conf, ring_conf, pinky_conf)
