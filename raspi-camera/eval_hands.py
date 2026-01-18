@@ -21,6 +21,9 @@ from gesture_hands import detect_hand_gesture, dict_to_landmarks, GESTURE_NAMES
 # Defined gestures (excluding NONE which is for false positive testing)
 DEFINED_GESTURES = [g for g in GESTURE_NAMES if g != 'NONE']
 
+# Results that indicate "no confident gesture detected" - valid for NONE test cases
+NO_GESTURE_RESULTS = {'UNKNOWN', 'NO HAND'}
+
 HISTORY_FILE = "eval_history.json"
 
 
@@ -120,9 +123,9 @@ def run_eval(cases, verbose=False):
         predicted, _ = detect_hand_gesture(landmarks, case['handedness'])
         expected = case['expected_gesture']
 
-        # For NONE cases, correct if predicted is NOT a defined gesture
+        # For NONE cases, correct if predicted is UNKNOWN or not a defined gesture
         if expected == 'NONE':
-            correct = (predicted not in DEFINED_GESTURES)
+            correct = (predicted in NO_GESTURE_RESULTS or predicted not in DEFINED_GESTURES)
         else:
             correct = (predicted == expected)
 
