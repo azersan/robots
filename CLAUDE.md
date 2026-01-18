@@ -121,6 +121,53 @@ arp -a | grep b8:27:eb            # Pi MAC prefix
 - picamera2's "RGB888" format outputs BGR (OpenCV convention)
 - Red detection needs two HSV ranges (hue wraps at 0/180)
 
+## Gesture Evaluation Framework
+
+**Purpose:** Test and iterate on hand gesture detection accuracy.
+
+### Files
+- `gesture_hands.py` - Pure Python gesture logic (no CV dependencies, testable)
+- `eval_hands.py` - Runs test cases, reports accuracy, tracks history
+- `test_data/hands/` - Test cases (JSON + screenshots)
+- `eval_history.json` - Accuracy over time with git commits
+
+### Workflow
+```bash
+# Capture test cases
+python3 local_hands.py --local --capture
+# Press 1-8 to select gesture, make gesture, press 'c'
+
+# Run evaluation
+python3 eval_hands.py
+
+# View history
+python3 eval_hands.py --history
+```
+
+### Learnings from Eval Development
+
+**Workflow tips:**
+- Use `raspi-camera/tmp/` folder for ad-hoc Python analysis scripts (avoids permission prompts)
+- Run `python3 eval_hands.py --no-save` for quick checks without polluting history
+- Commit after each logic change so history tracks which commit improved/regressed
+
+**Gesture detection insights:**
+- Thumb detection needs BOTH horizontal (thumb out) AND vertical (thumbs up) checks
+- Horizontal thumb extension should require thumb not curled under (vert >= -0.02)
+- Finger extension needs minimum threshold (0.03) to avoid false positives from noise
+- MediaPipe landmarks have None for presence/visibility - handle gracefully
+- Normalized coordinates: y increases downward (0=top, 1=bottom)
+
+**Test case quality:**
+- Bad captures (wrong timing, unusual angles) hurt accuracy metrics
+- When a gesture category has low accuracy, review screenshots before changing logic
+- Some failures are bad test cases, not bad detection logic
+
+**Thresholds (current values in gesture_hands.py):**
+- Thumb horizontal extension: `abs(thumb_tip.x - index_mcp.x) > 0.1`
+- Thumb vertical extension: `index_mcp.y - thumb_tip.y > 0.1`
+- Finger extension: `mcp.y - tip.y > 0.03`
+
 ## Hardware (Future)
 
 Motors not yet connected. When ready:
