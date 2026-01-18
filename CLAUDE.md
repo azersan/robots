@@ -106,7 +106,8 @@ arp -a | grep b8:27:eb            # Pi MAC prefix
 **Hand Gestures** (`local_hands.py`)
 - MediaPipe Hand Landmarker (21 points per hand)
 - Custom gesture logic: checks which fingers are extended
-- Gestures: FIST, THUMBS UP, POINTING, PEACE, OPEN PALM
+- Gestures: FIST, THUMBS UP, POINTING, PEACE, OPEN PALM, ROCK ON, CALL ME
+- Returns UNKNOWN when confidence is too low (reduces false positives)
 - Supports up to 2 hands
 
 **Common Controls (all apps):**
@@ -135,14 +136,24 @@ arp -a | grep b8:27:eb            # Pi MAC prefix
 ```bash
 # Capture test cases
 python3 local_hands.py --local --capture
-# Press 1-8 to select gesture, make gesture, press 'c'
+# Press 1-8 to select gesture (1=THUMBS UP, 2=FIST, ..., 8=NONE), make gesture, press 'c'
 
 # Run evaluation
 python3 eval_hands.py
 
+# Quick check without saving to history
+python3 eval_hands.py --no-save
+
 # View history
 python3 eval_hands.py --history
 ```
+
+### Tuning Approach
+When accuracy drops for a gesture category:
+1. Write analysis script in `tmp/` to examine failing cases vs passing cases
+2. Look for distinguishing features (ratios, spreads, z-depths, etc.)
+3. Compare distributions to find thresholds that separate them
+4. Add checks to gesture detection, run eval, iterate
 
 ### Learnings from Eval Development
 
@@ -167,6 +178,12 @@ python3 eval_hands.py --history
 - Thumb horizontal extension: `abs(thumb_tip.x - index_mcp.x) > 0.1`
 - Thumb vertical extension: `index_mcp.y - thumb_tip.y > 0.1`
 - Finger straightness: `direct_distance / segment_sum > 0.9`
+- Confidence threshold: `0.45` (below this, returns UNKNOWN)
+- Finger spread for OPEN PALM: `>= 0.052`
+- Z-spread for OPEN PALM: `<= 0.03` (palm must face camera)
+- Min finger ratio for OPEN PALM: `>= 0.98` (all fingers very straight)
+- Index ratio for POINTING: `>= 0.99` (index must be very extended)
+- Middle/ring ratio for ROCK ON: `< 0.75` (must be clearly curled)
 
 **Finger straightness detection:**
 - Original approach (tip above MCP) only works for fingers pointing UP
@@ -174,6 +191,31 @@ python3 eval_hands.py --history
 - Ratio of 1.0 = perfectly straight, <0.8 = bent
 - Direction-agnostic: works for pointing down, forward, sideways
 - Key insight: a straight finger has joints aligned regardless of orientation
+
+**Confidence scoring:**
+- Each finger state (extended/curled) has a confidence value (0-1)
+- High confidence when finger ratio is clearly above 0.9 (extended) or below 0.75 (curled)
+- Low confidence in the ambiguous zone (0.75-0.9)
+- Gesture confidence = average of relevant finger confidences
+- Returns UNKNOWN when confidence < threshold (reduces false positives)
+
+**Palm orientation (OPEN PALM vs side view):**
+- Use z-spread: depth variation across fingertips (thumb to pinky)
+- Palm facing camera: all fingertips at similar depth → z-spread < 0.03
+- Side view of hand: fingertips at varying depths → z-spread > 0.03
+- This distinguishes deliberate "stop" gesture from casual side-view of open hand
+
+**False positive testing (NONE gesture):**
+- NONE test cases capture hands visible but not making intentional gestures
+- Used to test and reduce false positive rate
+- Some NONE cases are fundamentally indistinguishable from real gestures without temporal info
+- Example: relaxed fist vs intentional FIST - identical landmarks, only intent differs
+
+**Limitations of static single-frame detection:**
+- Cannot distinguish intentional gesture from hand-happened-to-be-in-position
+- Hands in transition may briefly match gesture patterns
+- Solution would require temporal detection (gesture held for N frames)
+- Current eval accuracy ~83% is reasonable given these limitations
 
 ## Hardware (Future)
 
