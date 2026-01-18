@@ -147,6 +147,45 @@ def draw_hand_landmarks(frame, landmarks, handedness):
     return frame
 
 
+def draw_pointing_line(frame, landmarks):
+    """Draw a line showing pointing direction when POINTING gesture detected."""
+    if not landmarks or len(landmarks) < 21:
+        return frame
+
+    h, w = frame.shape[:2]
+
+    # Index finger landmarks: MCP(5) -> PIP(6) -> DIP(7) -> TIP(8)
+    # Use PIP to TIP for direction (more stable than MCP to TIP)
+    pip = landmarks[6]  # Index PIP (middle joint)
+    tip = landmarks[8]  # Index TIP
+
+    # Calculate direction vector
+    dx = tip.x - pip.x
+    dy = tip.y - pip.y
+
+    # Normalize and extend the line
+    length = (dx**2 + dy**2)**0.5
+    if length < 0.01:  # Avoid division by zero
+        return frame
+
+    # Extend line by 2x frame width for visibility
+    extend = 2.0 / length
+    end_x = tip.x + dx * extend
+    end_y = tip.y + dy * extend
+
+    # Convert to pixel coordinates
+    pt1 = (int(tip.x * w), int(tip.y * h))
+    pt2 = (int(end_x * w), int(end_y * h))
+
+    # Draw the pointing line (cyan, thin)
+    cv2.line(frame, pt1, pt2, (255, 255, 0), 2, cv2.LINE_AA)
+
+    # Draw a small circle at the fingertip
+    cv2.circle(frame, pt1, 6, (255, 255, 0), -1)
+
+    return frame
+
+
 def create_side_panel(gesture, gesture_color, fps, inference_ms, frame_height, is_flashing, num_hands, capture_mode=False):
     """Create info panel showing gesture and stats."""
     panel_width = 280
@@ -341,6 +380,10 @@ def main():
             for i, hand_landmarks in enumerate(results.hand_landmarks):
                 hand_name = results.handedness[i][0].category_name if results.handedness else "Unknown"
                 frame = draw_hand_landmarks(frame, hand_landmarks, hand_name)
+
+            # Draw pointing line if POINTING gesture detected
+            if gesture == "POINTING":
+                frame = draw_pointing_line(frame, current_landmarks)
 
         # Log gesture
         log_gesture(gesture)
