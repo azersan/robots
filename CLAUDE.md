@@ -99,11 +99,13 @@ arp -a | grep b8:27:eb            # Pi MAC prefix
 
 **Body Pose** (`local_pose.py`)
 - MediaPipe Pose Landmarker (33 body points)
-- Gesture recognition: STOP, TURN LEFT/RIGHT, POINT LEFT/RIGHT
+- Custom gesture logic on raw landmarks (not ML-based)
+- Gestures: STOP, TURN LEFT/RIGHT, POINT LEFT/RIGHT
 - Gesture log with deduplication
 
 **Hand Gestures** (`local_hands.py`)
 - MediaPipe Hand Landmarker (21 points per hand)
+- Custom gesture logic: checks which fingers are extended
 - Gestures: FIST, THUMBS UP, POINTING, PEACE, OPEN PALM
 - Supports up to 2 hands
 
