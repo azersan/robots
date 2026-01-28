@@ -14,7 +14,7 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 │  - Runs local_cv.py or local_cv_h264.py     │
 │  - Does all CV processing (color tracking,  │
 │    object detection, etc.)                  │
-│  - Future: sends motor commands back        │
+│  - TODO: send motor commands back to Pi     │
 └─────────────────────┬───────────────────────┘
                       │ WiFi (H264 stream)
                       ▼
@@ -22,7 +22,8 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 │  Pi Zero W (192.168.4.80 / pibot.local)     │
 │  - Runs stream_h264.py (GPU-accelerated)    │
 │  - Streams video at 640x480 @ 30fps         │
-│  - Future: motor control via GPIO PWM       │
+│  - Motor control via GPIO PWM (pigpio)      │
+│  - Powered by ESC BECs from 2S LiPo         │
 └─────────────────────────────────────────────┘
 ```
 
@@ -32,6 +33,7 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 - `raspi-camera/stream_h264.py` - Primary streamer, uses hardware H264 encoder, supports multiple clients
 - `raspi-camera/stream_raw.py` - Fallback MJPEG streamer (~10-13 fps)
 - `raspi-camera/stream.py` - On-device CV streaming (slow, ~3-6 fps)
+- `raspi-camera/motor_test.py` - Interactive motor control (w/a/s/d keys)
 
 **Mac-side (run locally):**
 - `raspi-camera/video_source.py` - Shared module for video input (webcam or Pi stream)
@@ -217,9 +219,70 @@ When accuracy drops for a gesture category:
 - Solution would require temporal detection (gesture held for N frames)
 - Current eval accuracy ~83% is reasonable given these limitations
 
-## Hardware (Future)
+## Hardware
 
-Motors not yet connected. When ready:
-- GPIO 18 → Left tinyESC (PWM 1000-2000µs, 50Hz)
-- GPIO 13 → Right tinyESC
-- Use `pigpio` library for precise PWM timing
+### Components
+- **Motors**: FingerTech Silver Spark 16mm Gearmotor 22:1 (x2)
+- **Motor Controllers**: FingerTech tinyESC v3.0 (x2)
+- **Battery**: 2S 7.4V 350mAh LiPo with mini power switch
+- **Computer**: Raspberry Pi Zero W with camera module
+
+### Power
+The Pi is powered from the tinyESC BECs via the 5V pins. Both ESC red wires connect to Pi 5V (Pin 2 and Pin 4). Battery switch controls power to entire system.
+
+### Motor Wiring
+
+| Motor | GPIO | Physical Pin | ESC Wire Colors |
+|-------|------|--------------|-----------------|
+| Left | 18 | Pin 12 | Orange→Pin 12, Brown→Pin 6 |
+| Right | 13 | Pin 33 | Orange→Pin 33, Brown→Pin 14 |
+
+**Note:** Both motors are inverted in software (`LEFT_INVERTED = True`, `RIGHT_INVERTED = True` in motor_test.py) because of how the motor wires are soldered.
+
+### PWM Signal
+- Frequency: 50Hz
+- Neutral (stop): 1500µs
+- Full forward: 2000µs (or 1000µs after inversion)
+- Full reverse: 1000µs (or 2000µs after inversion)
+- Use `pigpio` library for precise hardware PWM timing
+
+### Motor Control Scripts
+
+**Setup (one-time on Pi):**
+```bash
+sudo apt install pigpio python3-pigpio
+sudo systemctl enable pigpiod
+sudo systemctl start pigpiod
+```
+
+**Test motors:**
+```bash
+# Deploy from Mac
+scp raspi-camera/motor_test.py tazersky@pibot.local:~/
+
+# Run on Pi
+ssh tazersky@pibot.local
+python3 motor_test.py
+# Controls: w=forward, s=reverse, a=left, d=right, q=quit
+```
+
+### GPIO Pin Reference (viewing Pi from below, USB toward you)
+
+```
+SD card end
+    ↓
+   Pin 1  ●  ● Pin 2  (5V - ESC power in)
+   Pin 3  ●  ● Pin 4  (5V - ESC power in)
+   Pin 5  ●  ● Pin 6  (GND - Left ESC)
+    ...
+   Pin 11 ●  ● Pin 12 (GPIO 18 - Left motor signal)
+   Pin 13 ●  ● Pin 14 (GND - Right ESC)
+    ...
+   Pin 33 ●  ● Pin 34
+     ↑
+   GPIO 13 - Right motor signal
+    ...
+   Pin 39 ●  ● Pin 40
+    ↓
+USB ports
+```
