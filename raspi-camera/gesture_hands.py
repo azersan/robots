@@ -188,7 +188,7 @@ def get_thumb_extension(landmarks) -> Tuple[bool, float]:
 
     # Horizontal extension threshold
     HORIZ_THRESH = 0.1
-    VERT_THRESH = 0.1
+    VERT_THRESH = 0.045  # Lowered from 0.1 to detect Pi camera thumbs up
 
     # Check horizontal: thumb out to the side, but not curled under palm
     horiz_extended = horiz_dist > HORIZ_THRESH and vert_dist >= -0.02
@@ -231,7 +231,7 @@ def is_thumb_extended(landmarks) -> bool:
 DEFAULT_CONFIDENCE_THRESHOLD = 0.45
 
 # Minimum finger spread for OPEN PALM (distinguishes from relaxed hand)
-MIN_FINGER_SPREAD = 0.052
+MIN_FINGER_SPREAD = 0.025  # Lowered from 0.052 for Pi camera
 
 # Maximum z-spread for OPEN PALM (palm must face camera, not side view)
 MAX_Z_SPREAD_OPEN_PALM = 0.03
@@ -323,9 +323,18 @@ def detect_hand_gesture(landmarks, handedness: str,
         confidence = gesture_confidence(thumb_conf, index_conf, middle_conf, ring_conf, pinky_conf)
 
     elif thumb_up and fingers_up == 0:
-        gesture = "THUMBS UP"
-        color = (0, 255, 0)  # Green
-        confidence = gesture_confidence(thumb_conf, index_conf, middle_conf, ring_conf, pinky_conf)
+        # THUMBS UP requires thumb to be vertically extended (pointing up), not just sideways
+        thumb_tip = landmarks[THUMB_TIP]
+        index_mcp = landmarks[INDEX_MCP]
+        vert_dist = index_mcp.y - thumb_tip.y
+        horiz_dist = abs(thumb_tip.x - index_mcp.x)
+        # Strong vertical OR moderate vertical with thumb pointing toward camera (low horiz)
+        is_thumbs_up = (vert_dist > 0.08 or
+                       (vert_dist > 0.045 and horiz_dist < 0.04))
+        if is_thumbs_up:
+            gesture = "THUMBS UP"
+            color = (0, 255, 0)  # Green
+            confidence = gesture_confidence(thumb_conf, index_conf, middle_conf, ring_conf, pinky_conf)
 
     elif index_up and fingers_up == 1 and not thumb_up:
         # POINTING: require index to be very clearly extended
