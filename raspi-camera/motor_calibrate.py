@@ -27,6 +27,12 @@ RIGHT_INVERTED = True
 # PWM
 NEUTRAL = 1500
 DEFAULT_SPEED = 110  # Same as follow_red.py
+FORWARD_TRIM = 1.8   # Positive = boost right motor (corrects rightward drift)
+
+# Calibration results (at DEFAULT_SPEED)
+FORWARD_CM_PER_SEC = 20.0
+DEGREES_PER_SEC_LEFT = None   # Fill in after running turn calibration
+DEGREES_PER_SEC_RIGHT = None  # Fill in after running turn calibration
 
 
 class MotorController:
@@ -41,8 +47,8 @@ class MotorController:
             left_us = 3000 - left_us
         if RIGHT_INVERTED:
             right_us = 3000 - right_us
-        self.pi.set_servo_pulsewidth(LEFT_MOTOR, left_us)
-        self.pi.set_servo_pulsewidth(RIGHT_MOTOR, right_us)
+        self.pi.set_servo_pulsewidth(LEFT_MOTOR, round(left_us))
+        self.pi.set_servo_pulsewidth(RIGHT_MOTOR, round(right_us))
 
     def stop(self):
         self.set_motors(NEUTRAL, NEUTRAL)
@@ -53,11 +59,37 @@ class MotorController:
     def turn_right(self, speed=DEFAULT_SPEED):
         self.set_motors(NEUTRAL + speed, NEUTRAL - speed)
 
-    def forward(self, speed=DEFAULT_SPEED):
-        self.set_motors(NEUTRAL + speed, NEUTRAL + speed)
+    def forward(self, speed=DEFAULT_SPEED, trim=FORWARD_TRIM):
+        self.set_motors(NEUTRAL + speed - trim, NEUTRAL + speed + trim)
 
-    def reverse(self, speed=DEFAULT_SPEED):
-        self.set_motors(NEUTRAL - speed, NEUTRAL - speed)
+    def reverse(self, speed=DEFAULT_SPEED, trim=FORWARD_TRIM):
+        self.set_motors(NEUTRAL - speed - trim, NEUTRAL - speed + trim)
+
+    def forward_cm(self, cm):
+        duration = cm / FORWARD_CM_PER_SEC
+        self.forward()
+        time.sleep(duration)
+        self.stop()
+
+    def reverse_cm(self, cm):
+        duration = cm / FORWARD_CM_PER_SEC
+        self.reverse()
+        time.sleep(duration)
+        self.stop()
+
+    def turn_degrees(self, degrees):
+        if degrees > 0:
+            if DEGREES_PER_SEC_RIGHT is None:
+                raise RuntimeError("DEGREES_PER_SEC_RIGHT not calibrated yet. Run turn calibration first.")
+            duration = degrees / DEGREES_PER_SEC_RIGHT
+            self.turn_right()
+        else:
+            if DEGREES_PER_SEC_LEFT is None:
+                raise RuntimeError("DEGREES_PER_SEC_LEFT not calibrated yet. Run turn calibration first.")
+            duration = abs(degrees) / DEGREES_PER_SEC_LEFT
+            self.turn_left()
+        time.sleep(duration)
+        self.stop()
 
     def cleanup(self):
         self.stop()
@@ -111,10 +143,12 @@ def turn_calibration(motors):
             result = input(f"  How many degrees did it turn? (or press Enter to skip): ").strip()
             if result:
                 deg_per_sec = float(result) / dur
+                const_name = f"DEGREES_PER_SEC_{direction.upper()}"
                 print(f"  => {deg_per_sec:.1f} degrees/sec at speed {speed}")
                 time_for_90 = 90.0 / deg_per_sec
                 time_for_180 = 180.0 / deg_per_sec
                 print(f"  => 90° would take {time_for_90:.2f}s, 180° would take {time_for_180:.2f}s")
+                print(f"  Update {const_name} = {deg_per_sec:.1f} to make permanent.")
         print()
 
 
@@ -146,30 +180,83 @@ def forward_calibration(motors):
     print()
 
 
+def trim_calibration(motors):
+    """Test different trim values to get straight-line driving."""
+    print()
+    print("TRIM CALIBRATION")
+    print("=" * 40)
+    print("Test trim values to correct drift.")
+    print("Positive trim = boost right motor (corrects rightward curve).")
+    print("Type 'done' to return to menu.")
+    print()
+
+    speed = DEFAULT_SPEED
+    duration = 2.0
+    trim = FORWARD_TRIM
+
+    while True:
+        try:
+            val = input(f"Trim value [{trim}] (or 'done'): ").strip()
+            if val == 'done':
+                break
+            if val:
+                trim = float(val)
+
+            dur_val = input(f"Duration [{duration}s]: ").strip()
+            if dur_val:
+                duration = float(dur_val)
+        except ValueError:
+            print("Invalid number")
+            continue
+
+        print(f"  Forward at speed={speed}, trim={trim} for {duration}s")
+        print(f"  Left motor: {NEUTRAL + speed - trim}µs, Right motor: {NEUTRAL + speed + trim}µs")
+        countdown()
+        motors.forward(speed, trim)
+        time.sleep(duration)
+        motors.stop()
+        print(f"  STOP")
+
+        straight = input("  Did it drive straight? (y/n/Enter to try again): ").strip().lower()
+        if straight == 'y':
+            print(f"\n  => Good trim value: {trim}")
+            print(f"  Update FORWARD_TRIM = {trim} in the script to make it permanent.")
+            break
+        print()
+
+
 def custom_test(motors):
     """Run custom speed/duration/direction combos."""
     print()
     print("CUSTOM TEST")
     print("=" * 40)
     print("Enter custom parameters to fine-tune.")
-    print("Type 'done' to return to menu.")
+    print("Press Enter to repeat last values. Type 'done' to return to menu.")
     print()
 
+    action = "forward"
+    speed = DEFAULT_SPEED
+    duration = 0.5
+
     while True:
-        print("Actions: left, right, forward, reverse")
-        action = input("Action (or 'done'): ").strip().lower()
-        if action == 'done':
+        print(f"Actions: left, right, forward, reverse")
+        val = input(f"Action [{action}] (or 'done'): ").strip().lower()
+        if val == 'done':
             break
-        if action not in ('left', 'right', 'forward', 'reverse'):
-            print("Invalid action")
-            continue
+        if val:
+            if val not in ('left', 'right', 'forward', 'reverse'):
+                print("Invalid action")
+                continue
+            action = val
 
         try:
-            speed = input(f"Speed [{DEFAULT_SPEED}]: ").strip()
-            speed = int(speed) if speed else DEFAULT_SPEED
+            val = input(f"Speed [{speed}]: ").strip()
+            if val:
+                speed = int(val)
 
-            duration = input("Duration in seconds [0.5]: ").strip()
-            duration = float(duration) if duration else 0.5
+            val = input(f"Duration [{duration}s]: ").strip()
+            if val:
+                duration = float(val)
         except ValueError:
             print("Invalid number")
             continue
@@ -197,7 +284,8 @@ def main():
             print("Menu:")
             print("  1. Turn calibration (preset durations)")
             print("  2. Forward calibration (preset durations)")
-            print("  3. Custom test (specify action/speed/duration)")
+            print("  3. Trim calibration (fix drift)")
+            print("  4. Custom test (specify action/speed/duration)")
             print("  q. Quit")
             print()
 
@@ -208,6 +296,8 @@ def main():
             elif choice == '2':
                 forward_calibration(motors)
             elif choice == '3':
+                trim_calibration(motors)
+            elif choice == '4':
                 custom_test(motors)
             elif choice == 'q':
                 break
