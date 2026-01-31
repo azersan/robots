@@ -31,7 +31,7 @@ FORWARD_TRIM = 1.8   # Positive = boost right motor (corrects rightward drift)
 
 # Calibration results (at DEFAULT_SPEED)
 FORWARD_CM_PER_SEC = 20.0
-DEGREES_PER_SEC_LEFT = None   # Fill in after running turn calibration
+DEGREES_PER_SEC_LEFT = 55.4   # 360° in ~6.5s at speed 110
 DEGREES_PER_SEC_RIGHT = 102.9  # 360° in ~3.5s at speed 110
 
 
