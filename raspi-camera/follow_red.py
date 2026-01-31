@@ -44,7 +44,8 @@ MIN_AREA = 1000  # Minimum blob area to track
 CENTER_DEADZONE = 50  # Pixels from center to ignore (considered "centered")
 FRAME_WIDTH = 320
 FRAME_HEIGHT = 240
-LOST_TIMEOUT = 0.5  # Seconds to keep last command after losing red
+LOST_TURN_TIMEOUT = 0.15  # Seconds to keep turning after losing red
+LOST_FWD_TIMEOUT = 0.5    # Seconds to keep forward after losing red
 
 # Debug output directory
 DEBUG_DIR = "/tmp/follow_red_debug"
@@ -240,19 +241,28 @@ def main():
                 if offset < -CENTER_DEADZONE:
                     state = "LEFT"
                     last_direction = "LEFT"
+                    # Proportional: turn faster when further from center
+                    max_offset = frame_center - CENTER_DEADZONE
+                    ratio = min(1.0, abs(offset) / max_offset)
+                    speed = int(TURN_SPEED * (0.5 + 0.5 * ratio))
                     if motors:
-                        motors.turn_left()
+                        motors.turn_left(speed)
                 elif offset > CENTER_DEADZONE:
                     state = "RIGHT"
                     last_direction = "RIGHT"
+                    max_offset = frame_center - CENTER_DEADZONE
+                    ratio = min(1.0, abs(offset) / max_offset)
+                    speed = int(TURN_SPEED * (0.5 + 0.5 * ratio))
                     if motors:
-                        motors.turn_right()
+                        motors.turn_right(speed)
                 else:
                     state = "CENTER"
                     last_direction = "FORWARD"
                     if motors:
                         motors.forward()
-            elif time.time() - last_seen_time < LOST_TIMEOUT and last_direction:
+            elif last_direction and (
+                (last_direction == "FORWARD" and time.time() - last_seen_time < LOST_FWD_TIMEOUT) or
+                (last_direction != "FORWARD" and time.time() - last_seen_time < LOST_TURN_TIMEOUT)):
                 # Recently lost red - keep turning same direction
                 state = f"HOLD {last_direction}"
                 if motors:

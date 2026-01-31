@@ -34,6 +34,8 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 - `raspi-camera/stream_raw.py` - Fallback MJPEG streamer (~10-13 fps)
 - `raspi-camera/stream.py` - On-device CV streaming (slow, ~3-6 fps)
 - `raspi-camera/motor_test.py` - Interactive motor control (w/a/s/d keys)
+- `raspi-camera/motor_calibrate.py` - Motor calibration (timed pulses for measuring turns/distances)
+- `raspi-camera/follow_red.py` - Autonomous red object follower (camera + motors)
 
 **Mac-side (run locally):**
 - `raspi-camera/video_source.py` - Shared module for video input (webcam or Pi stream)
@@ -117,12 +119,61 @@ arp -a | grep b8:27:eb            # Pi MAC prefix
 - `s` - Screenshot
 - `q` - Quit
 
+## Autonomous Behaviors
+
+### Red Object Follower (`follow_red.py`)
+
+Runs on the Pi - uses camera to detect red objects and drives toward them.
+
+```bash
+# Deploy and run
+scp raspi-camera/follow_red.py tazersky@pibot.local:~/
+ssh tazersky@pibot.local
+python3 follow_red.py              # Normal mode
+python3 follow_red.py --debug      # Save debug frames to /tmp
+python3 follow_red.py --no-motors  # Detection only, no motor output
+```
+
+**How it works:**
+- Captures 320x240 frames from picamera2 (~10-12 FPS on Pi Zero)
+- Detects red blobs using HSV color tracking (same ranges as local_cv_h264.py)
+- Proportional turning: turns faster when red is far from center, slower when close
+- Drives forward when red is centered
+- Holds last direction briefly when red is lost (0.15s for turns, 0.5s for forward)
+- Stops when no red detected
+
+**Tunable constants:**
+- `TURN_SPEED = 110` - Max turn speed (µs offset from neutral)
+- `CENTER_DEADZONE = 50` - Pixels from center that count as "centered"
+- `LOST_TURN_TIMEOUT = 0.15` - Seconds to hold turn after losing red
+- `LOST_FWD_TIMEOUT = 0.5` - Seconds to hold forward after losing red
+- `MIN_AREA = 1000` - Minimum red blob area to track
+
+**Debug mode** (`--debug`): Saves annotated `frame.jpg` and `mask.jpg` to `/tmp/follow_red_debug/`. View from Mac:
+```bash
+scp tazersky@pibot.local:/tmp/follow_red_debug/frame.jpg /tmp/ && open /tmp/frame.jpg
+```
+
+### Motor Calibration (`motor_calibrate.py`)
+
+Interactive script for measuring turn angles and forward distances.
+
+```bash
+scp raspi-camera/motor_calibrate.py tazersky@pibot.local:~/
+ssh tazersky@pibot.local
+python3 motor_calibrate.py
+```
+
+Menu-driven: turn calibration (preset durations), forward calibration, or custom tests. Calculates degrees/sec and distance/sec from manual observations.
+
 ## Performance Notes
 
 - Pi Zero W CPU is the bottleneck - offload CV to laptop
 - H264 uses GPU encoder: 25-30 fps vs MJPEG's 10-13 fps
 - picamera2's "RGB888" format outputs BGR (OpenCV convention)
 - Red detection needs two HSV ranges (hue wraps at 0/180)
+- On-Pi CV (follow_red.py) runs ~10-12 FPS at 320x240
+- ESC deadband: PWM values within ~75µs of neutral (1500) may not move motors
 
 ## Gesture Evaluation Framework
 
