@@ -31,7 +31,8 @@ RIGHT_INVERTED = True
 
 # PWM values (microseconds)
 NEUTRAL = 1500
-TURN_SPEED = 110  # Amount to add/subtract from neutral for turning
+DRIVE_SPEED = 110  # Forward speed
+FORWARD_TRIM = 1.8  # Positive = boost right motor (corrects drift)
 
 # Color tracking settings (red in HSV)
 RED_LOWER1 = np.array([0, 120, 70])
@@ -44,8 +45,7 @@ MIN_AREA = 1000  # Minimum blob area to track
 CENTER_DEADZONE = 50  # Pixels from center to ignore (considered "centered")
 FRAME_WIDTH = 320
 FRAME_HEIGHT = 240
-LOST_TURN_TIMEOUT = 0.15  # Seconds to keep turning after losing red
-LOST_FWD_TIMEOUT = 0.5    # Seconds to keep forward after losing red
+LOST_TIMEOUT = 0.5  # Seconds to keep driving after losing red
 
 # Debug output directory
 DEBUG_DIR = "/tmp/follow_red_debug"
@@ -77,17 +77,22 @@ class MotorController:
         """Stop both motors."""
         self.set_motors(NEUTRAL, NEUTRAL)
 
-    def turn_left(self, speed=TURN_SPEED):
-        """Turn left: right forward, left reverse."""
-        self.set_motors(NEUTRAL - speed, NEUTRAL + speed)
-
-    def turn_right(self, speed=TURN_SPEED):
-        """Turn right: left forward, right reverse."""
-        self.set_motors(NEUTRAL + speed, NEUTRAL - speed)
-
-    def forward(self, speed=TURN_SPEED):
-        """Go forward."""
-        self.set_motors(NEUTRAL + speed, NEUTRAL + speed)
+    def drive(self, steer=0.0, speed=DRIVE_SPEED):
+        """Drive forward with steering.
+        steer: -1.0 (full left) to 1.0 (full right), 0.0 = straight.
+        Reduces inner motor speed to curve; outer stays at full speed.
+        """
+        left_speed = speed
+        right_speed = speed
+        if steer < 0:
+            # Curve left: slow down left motor
+            left_speed = speed * (1.0 + steer)  # steer is negative, so this reduces
+        elif steer > 0:
+            # Curve right: slow down right motor
+            right_speed = speed * (1.0 - steer)
+        left_us = NEUTRAL + left_speed - FORWARD_TRIM
+        right_us = NEUTRAL + right_speed + FORWARD_TRIM
+        self.set_motors(round(left_us), round(right_us))
 
     def cleanup(self):
         """Stop motors and release GPIO."""
@@ -217,7 +222,7 @@ def main():
     frame_center = FRAME_WIDTH // 2
     last_state = None
     last_seen_time = 0  # Time red was last detected
-    last_direction = None  # Last turn direction when red was seen
+    last_steer = None  # Last steering value when red was seen
     fps_time = time.time()
     fps_count = 0
 
@@ -238,52 +243,38 @@ def main():
                 last_seen_time = time.time()
                 offset = cx - frame_center
 
-                if offset < -CENTER_DEADZONE:
-                    state = "LEFT"
-                    last_direction = "LEFT"
-                    # Proportional: turn faster when further from center
-                    max_offset = frame_center - CENTER_DEADZONE
-                    ratio = min(1.0, abs(offset) / max_offset)
-                    speed = int(TURN_SPEED * (0.5 + 0.5 * ratio))
-                    if motors:
-                        motors.turn_left(speed)
-                elif offset > CENTER_DEADZONE:
-                    state = "RIGHT"
-                    last_direction = "RIGHT"
-                    max_offset = frame_center - CENTER_DEADZONE
-                    ratio = min(1.0, abs(offset) / max_offset)
-                    speed = int(TURN_SPEED * (0.5 + 0.5 * ratio))
-                    if motors:
-                        motors.turn_right(speed)
-                else:
+                # Proportional steering: map pixel offset to -1.0..1.0
+                max_offset = frame_center - CENTER_DEADZONE
+                if abs(offset) < CENTER_DEADZONE:
+                    steer = 0.0
                     state = "CENTER"
-                    last_direction = "FORWARD"
-                    if motors:
-                        motors.forward()
-            elif last_direction and (
-                (last_direction == "FORWARD" and time.time() - last_seen_time < LOST_FWD_TIMEOUT) or
-                (last_direction != "FORWARD" and time.time() - last_seen_time < LOST_TURN_TIMEOUT)):
-                # Recently lost red - keep turning same direction
-                state = f"HOLD {last_direction}"
+                elif offset < 0:
+                    steer = -min(1.0, (abs(offset) - CENTER_DEADZONE) / max_offset)
+                    state = "LEFT"
+                else:
+                    steer = min(1.0, (offset - CENTER_DEADZONE) / max_offset)
+                    state = "RIGHT"
+
+                last_steer = steer
                 if motors:
-                    if last_direction == "LEFT":
-                        motors.turn_left()
-                    elif last_direction == "RIGHT":
-                        motors.turn_right()
-                    else:
-                        motors.forward()
+                    motors.drive(steer)
+            elif last_steer is not None and time.time() - last_seen_time < LOST_TIMEOUT:
+                # Recently lost red - keep driving with last steering
+                state = f"HOLD"
+                if motors:
+                    motors.drive(last_steer)
             else:
                 state = "SEARCHING"
-                last_direction = None
+                last_steer = None
                 if motors:
                     motors.stop()
 
             # Print state changes
             if state != last_state:
                 if detected:
-                    print(f"[{state}] Red at ({cx}, {cy}), area={area}")
-                elif "HOLD" in state:
-                    print(f"[{state}] Lost red, holding direction")
+                    print(f"[{state}] Red at ({cx}, {cy}), area={area}, steer={steer:.2f}")
+                elif state == "HOLD":
+                    print(f"[{state}] Lost red, holding steer={last_steer:.2f}")
                 else:
                     print(f"[{state}] No red detected")
                 last_state = state
