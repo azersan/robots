@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 """
-Red object follower - runs on Pi Zero W.
-Detects red objects and turns toward them using motors.
+Red object follower - runs on Raspberry Pi.
+Detects red objects and drives toward them using motors.
 
 Usage:
     python3 follow_red.py
 
 Requires:
     - picamera2
-    - pigpio daemon running (sudo systemctl start pigpiod)
+    - lgpio (Pi 5) or pigpio (Pi Zero/3/4)
     - OpenCV (cv2)
 """
 
 import cv2
 import numpy as np
-import pigpio
 import time
+
+# Try lgpio first (Pi 5), fall back to pigpio
+try:
+    import lgpio
+    USE_LGPIO = True
+except ImportError:
+    import pigpio
+    USE_LGPIO = False
 import signal
 import sys
 import os
@@ -53,11 +60,17 @@ DEBUG_DIR = "/tmp/follow_red_debug"
 
 class MotorController:
     def __init__(self):
-        self.pi = pigpio.pi()
-        if not self.pi.connected:
-            raise RuntimeError("Could not connect to pigpio daemon. Run: sudo systemctl start pigpiod")
+        if USE_LGPIO:
+            self.handle = lgpio.gpiochip_open(0)
+            if self.handle < 0:
+                raise RuntimeError("Could not open GPIO chip")
+            print("Motors initialized (lgpio)")
+        else:
+            self.pi = pigpio.pi()
+            if not self.pi.connected:
+                raise RuntimeError("Could not connect to pigpio daemon. Run: sudo systemctl start pigpiod")
+            print("Motors initialized (pigpio)")
         self.stop()
-        print("Motors initialized")
 
     def _apply_inversion(self, left_us, right_us):
         """Apply motor inversion."""
@@ -70,8 +83,12 @@ class MotorController:
     def set_motors(self, left_us, right_us):
         """Set motor speeds in microseconds (1000-2000)."""
         left_us, right_us = self._apply_inversion(left_us, right_us)
-        self.pi.set_servo_pulsewidth(LEFT_MOTOR, left_us)
-        self.pi.set_servo_pulsewidth(RIGHT_MOTOR, right_us)
+        if USE_LGPIO:
+            lgpio.tx_servo(self.handle, LEFT_MOTOR, left_us)
+            lgpio.tx_servo(self.handle, RIGHT_MOTOR, right_us)
+        else:
+            self.pi.set_servo_pulsewidth(LEFT_MOTOR, left_us)
+            self.pi.set_servo_pulsewidth(RIGHT_MOTOR, right_us)
 
     def stop(self):
         """Stop both motors."""
@@ -98,9 +115,14 @@ class MotorController:
         """Stop motors and release GPIO."""
         self.stop()
         time.sleep(0.1)
-        self.pi.set_servo_pulsewidth(LEFT_MOTOR, 0)
-        self.pi.set_servo_pulsewidth(RIGHT_MOTOR, 0)
-        self.pi.stop()
+        if USE_LGPIO:
+            lgpio.tx_servo(self.handle, LEFT_MOTOR, 0)
+            lgpio.tx_servo(self.handle, RIGHT_MOTOR, 0)
+            lgpio.gpiochip_close(self.handle)
+        else:
+            self.pi.set_servo_pulsewidth(LEFT_MOTOR, 0)
+            self.pi.set_servo_pulsewidth(RIGHT_MOTOR, 0)
+            self.pi.stop()
 
 
 def detect_red(frame):

@@ -6,15 +6,22 @@ Runs timed motor pulses for manual observation and measurement.
 Use the results to determine how long to run motors for specific
 turns (90°, 180°) and distances.
 
-Requires pigpio daemon: sudo systemctl start pigpiod
+Requires lgpio (Pi 5) or pigpio daemon (Pi Zero/3/4).
 
 Usage:
     python3 motor_calibrate.py
 """
 
-import pigpio
 import time
 import sys
+
+# Try lgpio first (Pi 5), fall back to pigpio
+try:
+    import lgpio
+    USE_LGPIO = True
+except ImportError:
+    import pigpio
+    USE_LGPIO = False
 
 # GPIO pin assignments
 LEFT_MOTOR = 18   # Pin 12
@@ -37,9 +44,14 @@ DEGREES_PER_SEC_RIGHT = 102.9  # 360° in ~3.5s at speed 110
 
 class MotorController:
     def __init__(self):
-        self.pi = pigpio.pi()
-        if not self.pi.connected:
-            raise RuntimeError("Could not connect to pigpio daemon. Run: sudo systemctl start pigpiod")
+        if USE_LGPIO:
+            self.handle = lgpio.gpiochip_open(0)
+            if self.handle < 0:
+                raise RuntimeError("Could not open GPIO chip")
+        else:
+            self.pi = pigpio.pi()
+            if not self.pi.connected:
+                raise RuntimeError("Could not connect to pigpio daemon. Run: sudo systemctl start pigpiod")
         self.stop()
 
     def set_motors(self, left_us, right_us):
@@ -47,8 +59,12 @@ class MotorController:
             left_us = 3000 - left_us
         if RIGHT_INVERTED:
             right_us = 3000 - right_us
-        self.pi.set_servo_pulsewidth(LEFT_MOTOR, round(left_us))
-        self.pi.set_servo_pulsewidth(RIGHT_MOTOR, round(right_us))
+        if USE_LGPIO:
+            lgpio.tx_servo(self.handle, LEFT_MOTOR, round(left_us))
+            lgpio.tx_servo(self.handle, RIGHT_MOTOR, round(right_us))
+        else:
+            self.pi.set_servo_pulsewidth(LEFT_MOTOR, round(left_us))
+            self.pi.set_servo_pulsewidth(RIGHT_MOTOR, round(right_us))
 
     def stop(self):
         self.set_motors(NEUTRAL, NEUTRAL)
@@ -94,9 +110,14 @@ class MotorController:
     def cleanup(self):
         self.stop()
         time.sleep(0.1)
-        self.pi.set_servo_pulsewidth(LEFT_MOTOR, 0)
-        self.pi.set_servo_pulsewidth(RIGHT_MOTOR, 0)
-        self.pi.stop()
+        if USE_LGPIO:
+            lgpio.tx_servo(self.handle, LEFT_MOTOR, 0)
+            lgpio.tx_servo(self.handle, RIGHT_MOTOR, 0)
+            lgpio.gpiochip_close(self.handle)
+        else:
+            self.pi.set_servo_pulsewidth(LEFT_MOTOR, 0)
+            self.pi.set_servo_pulsewidth(RIGHT_MOTOR, 0)
+            self.pi.stop()
 
 
 def countdown(seconds=3):
