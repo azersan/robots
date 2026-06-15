@@ -4,43 +4,49 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Autonomous robot project converting a battle bot into a vision-based autonomous robot. Uses a Raspberry Pi Zero W with camera module, with heavy CV processing offloaded to a laptop.
+Autonomous robot project converting a battle bot into a vision-based autonomous robot. Uses a Raspberry Pi 5 with camera module, with heavy CV processing offloaded to a laptop.
+
+> **Hardware note:** The robot is now a **Raspberry Pi 5** (`pibot5-2g.local`), not the original Pi Zero W. The Pi 5 uses the `lgpio` library (not `pigpio`) and the scripts in `raspi-camera/pi-5/`. The `raspi-camera/pi-zero/` scripts are legacy. Some sections below may still reference Pi Zero details — see the Pi 5 files as the source of truth.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
 │  Laptop (Mac)                               │
-│  - Runs local_cv.py or local_cv_h264.py     │
-│  - Does all CV processing (color tracking,  │
-│    object detection, etc.)                  │
-│  - TODO: send motor commands back to Pi     │
-└─────────────────────┬───────────────────────┘
-                      │ WiFi (H264 stream)
-                      ▼
+│  - Runs local CV apps (yolo/pose/hands/cv)  │
+│    via video_source.py (latest-frame grab)  │
+│  - Sends drive commands via robot_client.py │
+└──────────┬───────────────────────▲──────────┘
+           │ POST /drive /tank      │ WiFi (MJPEG stream)
+           ▼                        │
 ┌─────────────────────────────────────────────┐
-│  Pi Zero W (192.168.4.80 / pibot.local)     │
-│  - Runs stream_h264.py (GPU-accelerated)    │
-│  - Streams video at 640x480 @ 30fps         │
-│  - Motor control via GPIO PWM (pigpio)      │
-│  - Powered by ESC BECs from 2S LiPo         │
+│  Pi 5 (pibot5-2g.local, DHCP IP)            │
+│  - Runs robot_server.py (Flask, port 8080)  │
+│  - Streams MJPEG video AND takes commands   │
+│  - Motor control via lgpio PWM + watchdog   │
+│  - Powered by a Pololu regulator from LiPo  │
 └─────────────────────────────────────────────┘
 ```
 
+The control loop is bidirectional: the Pi streams video and accepts drive
+commands on the same port. A watchdog stops the motors if commands stop.
+
 ## Key Files
 
-**Pi-side (deploy to Pi via SSH):**
-- `raspi-camera/stream_h264.py` - Primary streamer, uses hardware H264 encoder, supports multiple clients
-- `raspi-camera/stream_raw.py` - Fallback MJPEG streamer (~10-13 fps)
-- `raspi-camera/stream.py` - On-device CV streaming (slow, ~3-6 fps)
-- `raspi-camera/motor_test.py` - Interactive motor control (w/a/s/d keys)
-- `raspi-camera/motor_calibrate.py` - Motor calibration (timed pulses for measuring turns/distances)
-- `raspi-camera/follow_red.py` - Autonomous red object follower (camera + motors)
+**Pi 5-side (`raspi-camera/pi-5/`, deploy to Pi home dir via SSH):**
+- `robot_server.py` - **Primary server.** Combined Flask app: MJPEG stream + motor control (`/drive`, `/tank`, `/stop`, `/health`) on port 8080, with an idle watchdog. Replaces `stream.py`.
+- `motors.py` - `MotorController` (lgpio PWM). Importable module + interactive `w/a/s/d` test. Has per-motor balance trim.
+- `stream.py` - Stream-only MJPEG server (superseded by `robot_server.py`).
+
+**Pi Zero-side (`raspi-camera/pi-zero/`, legacy):**
+- `stream_h264.py`, `stream_raw.py`, `stream.py`, `motor_test.py`, `motor_calibrate.py`, `follow_red.py` - Pi Zero W versions (use `pigpio`, GPIO 18 for left motor). Kept for reference.
 
 **Mac-side (run locally):**
-- `raspi-camera/video_source.py` - Shared module for video input (webcam or Pi stream)
+- `raspi-camera/video_source.py` - Shared video input (webcam or Pi stream). Wraps captures in a threaded `FrameGrabber` that keeps only the newest frame (prevents lag buildup).
+- `raspi-camera/robot_client.py` - Sends drive commands to `robot_server.py` (non-blocking, rate-limited).
+- `raspi-camera/drive_keyboard.py` - Keyboard remote-control test (`w/a/s/d`) using `robot_client.py`.
 - `raspi-camera/local_cv_h264.py` - Color tracking
-- `raspi-camera/local_yolo.py` - YOLOv8 object detection with class filtering
+- `raspi-camera/local_yolo.py` - YOLOv8 object detection (class filtering; uses `device='mps'`, `imgsz=320`)
 - `raspi-camera/local_pose.py` - Body pose detection with gesture recognition
 - `raspi-camera/local_hands.py` - Hand gesture detection
 - `raspi-camera/local_cv.py` - Color tracking (MJPEG fallback)
@@ -49,21 +55,29 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 
 ### Pi Access
 ```bash
-ssh tazersky@pibot.local          # Or: ssh tazersky@192.168.4.80
-tmux attach -t pibot              # Attach to existing session
+ssh tazersky@pibot5-2g.local      # Pi 5 hostname (preferred - survives IP changes)
 ```
+**Connection notes:** The Pi 5's IP is DHCP-assigned and has drifted (seen at
+.80, .38, .35 over time), so prefer the hostname. mDNS (`.local`) resolution is
+occasionally flaky over WiFi — if it won't resolve, find the current IP via ARP
+(below) and use it directly. A stale SSH host key after an IP reuse is cleared
+with `ssh-keygen -R <ip>`.
 
-### Start Streaming (on Pi)
+### Start Server (on Pi)
 ```bash
-python3 stream_h264.py            # Preferred: H264 at 30fps
-python3 stream_raw.py             # Fallback: MJPEG at 10-13fps
+# Combined stream + motor control (run in Pi home dir; needs motors.py alongside)
+python3 robot_server.py                 # MJPEG + control on port 8080
+python3 robot_server.py --no-motors     # stream only (no motor init)
+
+# Launch detached so it survives the SSH session:
+nohup python3 ~/robot_server.py > ~/robot_server.log 2>&1 < /dev/null & disown
 ```
 
 ### Run Local CV (on Mac)
 ```bash
 cd raspi-camera
 
-# Default: connect to Pi stream at 192.168.4.80
+# Default: connect to Pi stream at pibot5-2g.local (see video_source.py)
 python3 local_yolo.py
 python3 local_pose.py
 python3 local_hands.py
@@ -73,9 +87,16 @@ python3 local_cv_h264.py
 python3 local_yolo.py --local
 python3 local_pose.py -l          # -l is shorthand for --local
 
-# Connect to Pi at different IP
-python3 local_yolo.py --source 10.0.0.5
-python3 local_yolo.py -s 10.0.0.5 # -s is shorthand for --source
+# Connect to Pi at a specific IP (when mDNS is flaky)
+python3 local_yolo.py --source 192.168.4.35
+python3 local_yolo.py -s 192.168.4.35  # -s is shorthand for --source
+```
+
+### Drive the Robot from the Mac
+```bash
+cd raspi-camera
+python3 drive_keyboard.py                # w/a/s/d drive, space=stop, q=quit
+python3 drive_keyboard.py -s 192.168.4.35
 ```
 
 ### Install Dependencies (on Mac)
@@ -86,8 +107,8 @@ pip3 install -r requirements.txt
 
 ### Find Pi on Network
 ```bash
-ping pibot.local
-arp -a | grep b8:27:eb            # Pi MAC prefix
+ping pibot5-2g.local
+arp -a | grep 2c:cf:67            # Pi 5 MAC prefix (Pi Zero was b8:27:eb)
 ```
 
 ## CV Capabilities
@@ -276,64 +297,67 @@ When accuracy drops for a gesture category:
 - **Motors**: FingerTech Silver Spark 16mm Gearmotor 22:1 (x2)
 - **Motor Controllers**: FingerTech tinyESC v3.0 (x2)
 - **Battery**: 2S 7.4V 350mAh LiPo with mini power switch
-- **Computer**: Raspberry Pi Zero W with camera module
+- **Computer**: Raspberry Pi 5 (`pibot5-2g.local`) with Camera Module 3 Wide (imx708)
+- **Frame**: rebuilt onto a new chassis — old ground calibration (turn/distance/straight trim) is stale, recalibrate on the floor
 
 ### Power
-The Pi is powered from the tinyESC BECs via the 5V pins. Both ESC red wires connect to Pi 5V (Pin 2 and Pin 4). Battery switch controls power to entire system.
+The Pi is powered by a Pololu regulator. The red (BEC) lead on each ESC is capped off and left disconnected — the ESCs only carry signal and ground to the Pi. Battery switch controls power to entire system.
 
 ### Motor Wiring
 
-| Motor | GPIO | Physical Pin | ESC Wire Colors |
-|-------|------|--------------|-----------------|
-| Left | 18 | Pin 12 | Orange→Pin 12, Brown→Pin 6 |
-| Right | 13 | Pin 33 | Orange→Pin 33, Brown→Pin 14 |
+| Motor | GPIO | Signal Pin (orange) | Ground Pin (brown) | ESC |
+|-------|------|---------------------|--------------------|-----|
+| Left | 12 | Pin 32 | Pin 30 | tinyESC 1 |
+| Right | 13 | Pin 33 | Pin 34 | tinyESC 2 |
 
-**Note:** Both motors are inverted in software (`LEFT_INVERTED = True`, `RIGHT_INVERTED = True` in motor_test.py) because of how the motor wires are soldered.
+**Note:** Both motors are inverted in software (`LEFT_INVERTED = True`, `RIGHT_INVERTED = True` in `pi-5/motors.py`) because of how the motor wires are soldered.
 
 ### PWM Signal
 - Frequency: 50Hz
 - Neutral (stop): 1500µs
 - Full forward: 2000µs (or 1000µs after inversion)
 - Full reverse: 1000µs (or 2000µs after inversion)
-- Use `pigpio` library for precise hardware PWM timing
+- Pi 5 uses the `lgpio` library (`tx_servo`) for PWM — no daemon needed
+- **Idle behavior:** software-timed neutral pulses jitter around the ESC deadband (worse under streaming CPU load) and make the motors twitch at rest. `motors.disarm()` ceases pulses entirely when idle; `robot_server.py`'s watchdog calls it after 0.5s of no commands. The tinyESC re-arms instantly when pulses resume.
+- **Per-motor balance:** the two motors aren't matched, so `motors.py` has per-direction gain trims (`LEFT_REV_GAIN` etc.) to even them out. Current: `LEFT_REV_GAIN = 1.3` (left was weak in reverse). Tune on a stand; final straight-line trim must be done on the ground.
 
 ### Motor Control Scripts
 
-**Setup (one-time on Pi):**
+**Setup (one-time on Pi 5):**
 ```bash
-sudo apt install pigpio python3-pigpio
-sudo systemctl enable pigpiod
-sudo systemctl start pigpiod
+sudo apt install python3-lgpio   # lgpio is the Pi 5 GPIO library (no daemon)
 ```
 
-**Test motors:**
+**Test motors (Pi 5):**
 ```bash
 # Deploy from Mac
-scp raspi-camera/motor_test.py tazersky@pibot.local:~/
+scp raspi-camera/pi-5/motors.py tazersky@pibot5-2g.local:~/
 
 # Run on Pi
-ssh tazersky@pibot.local
-python3 motor_test.py
-# Controls: w=forward, s=reverse, a=left, d=right, q=quit
+ssh tazersky@pibot5-2g.local
+python3 motors.py
+# Controls: w=forward, s=reverse, a=left, d=right, space=stop, q=quit
 ```
+
+Or drive remotely from the Mac with `robot_server.py` running on the Pi — see
+"Drive the Robot from the Mac" above.
 
 ### GPIO Pin Reference (viewing Pi from below, USB toward you)
 
 ```
 SD card end
     ↓
-   Pin 1  ●  ● Pin 2  (5V - ESC power in)
-   Pin 3  ●  ● Pin 4  (5V - ESC power in)
-   Pin 5  ●  ● Pin 6  (GND - Left ESC)
+   Pin 1  ●  ● Pin 2
     ...
-   Pin 11 ●  ● Pin 12 (GPIO 18 - Left motor signal)
-   Pin 13 ●  ● Pin 14 (GND - Right ESC)
-    ...
-   Pin 33 ●  ● Pin 34
+   Pin 29 ●  ● Pin 30 (GND - Left ESC, brown)
+   Pin 31 ●  ● Pin 32 (GPIO 12 - Left motor signal, orange)
+   Pin 33 ●  ● Pin 34 (GND - Right ESC, brown)
      ↑
-   GPIO 13 - Right motor signal
+   GPIO 13 - Right motor signal (orange)
     ...
    Pin 39 ●  ● Pin 40
     ↓
 USB ports
 ```
+
+**Note:** ESC 5V (red/BEC) leads are capped off — the Pi is powered by a Pololu regulator, not the ESC BECs.

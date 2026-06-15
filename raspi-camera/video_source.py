@@ -12,12 +12,66 @@ Usage:
 """
 
 import argparse
+import threading
+import time
 import cv2
 
 # Defaults
-DEFAULT_PI_HOST = "192.168.4.80"
+DEFAULT_PI_HOST = "pibot5-2g.local"
 DEFAULT_PORT = 8080
 DEFAULT_STREAM_PATH = "/stream"
+
+
+class FrameGrabber:
+    """Wraps a cv2.VideoCapture in a background thread that always holds only
+    the most recent frame.
+
+    Network MJPEG streams buffer frames in the OS/ffmpeg pipeline. When the
+    consumer (e.g. YOLO) is slower than the stream, plain cap.read() returns
+    the OLDEST buffered frame, so latency grows without bound. This reader
+    drains the capture continuously and keeps just the newest frame, so
+    read() always returns "now" and stale frames are dropped instead of
+    processed. Exposes the subset of the VideoCapture API the apps use.
+    """
+
+    def __init__(self, cap, warmup=3.0):
+        self.cap = cap
+        self.lock = threading.Lock()
+        self.frame = None
+        self.ret = False
+        self.running = True
+        self.thread = threading.Thread(target=self._reader, daemon=True)
+        self.thread.start()
+        # Block briefly so callers see a ready capture (or a clean failure).
+        start = time.time()
+        while self.frame is None and self.running and (time.time() - start) < warmup:
+            time.sleep(0.01)
+
+    def _reader(self):
+        while self.running:
+            ret, frame = self.cap.read()
+            if not ret:
+                with self.lock:
+                    self.ret = False
+                time.sleep(0.005)  # avoid busy-spin on read failure
+                continue
+            # cap.read() returns a fresh array each call, so swapping the
+            # reference under the lock needs no copy.
+            with self.lock:
+                self.ret = True
+                self.frame = frame
+
+    def read(self):
+        with self.lock:
+            return self.ret, self.frame
+
+    def isOpened(self):
+        return self.cap.isOpened()
+
+    def release(self):
+        self.running = False
+        self.thread.join(timeout=1.0)
+        self.cap.release()
 
 
 def create_parser(description="CV app"):
@@ -89,12 +143,13 @@ def get_capture(args):
         cap = cv2.VideoCapture(0)
         print(f"Using local webcam")
     else:
-        # Remote stream (H264)
+        # Remote stream (MJPEG over HTTP)
         cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         print(f"Connecting to {source}")
 
-    return cap
+    # Wrap in a latest-frame reader so slow consumers don't accumulate lag.
+    return FrameGrabber(cap)
 
 
 def reconnect(args, cap):

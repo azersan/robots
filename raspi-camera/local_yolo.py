@@ -19,6 +19,8 @@ import video_source
 CONFIDENCE_THRESHOLD = 0.5
 MODEL_SIZE = "n"  # n=nano (fastest), s=small, m=medium, l=large, x=extra large
 PERSISTENCE_FRAMES = 5  # Keep detections visible for N frames after disappearing
+INFER_DEVICE = "mps"  # Apple GPU (Metal). Use "cpu" if mps is unavailable.
+INFER_IMGSZ = 320  # Inference resolution (multiple of 32). Lower = faster.
 
 # Class filtering - set ONE of these (leave other empty)
 # Use class names from COCO dataset (see list below)
@@ -275,7 +277,7 @@ def main():
 
         # Run YOLO inference
         inference_start = time.time()
-        results = model(frame, verbose=False)
+        results = model(frame, verbose=False, device=INFER_DEVICE, imgsz=INFER_IMGSZ)
         inference_ms = (time.time() - inference_start) * 1000
 
         # Extract and track detections (smooths flickering)
