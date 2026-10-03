@@ -9,7 +9,7 @@ existing Mac stream clients keep working unchanged).
 Endpoints:
   GET  /         - HTML viewer
   GET  /stream   - MJPEG video stream
-  POST /drive    - {"steer": -1..1, "speed": 0..1}   curve while driving
+  POST /drive    - {"steer": -1..1, "speed": -1..1}   curve while driving
   POST /tank     - {"left": -1..1, "right": -1..1}    direct per-side control
   POST /stop     - stop motors
   GET  /health   - {"ok": true}
@@ -29,6 +29,8 @@ from flask import Flask, Response, request, jsonify
 from picamera2 import Picamera2
 import cv2
 import argparse
+import math
+import signal
 import threading
 import time
 
@@ -38,7 +40,7 @@ app = Flask(__name__)
 
 # --- Camera state ---
 camera = None
-jpeg_quality = 85
+broadcaster = None
 
 # --- Motor state ---
 motors = None
@@ -46,19 +48,72 @@ motor_lock = threading.Lock()        # serialize motor access (handlers + watchd
 last_command_time = 0.0              # monotonic time of last drive/tank command
 COMMAND_TIMEOUT = 0.5                # auto-stop if no command within this window (s)
 SPEED_MAX = 130                      # max us offset from neutral mapped from speed=1.0
+DEADBAND_US = 80                     # ESC ignores offsets smaller than ~75us
 
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+def command_to_offset(v):
+    """Map a normalized command (-1..1) to a us offset from neutral.
+
+    The tinyESC has a ~75us deadband around neutral where nothing moves, so
+    a linear map wastes the bottom half of the command range. Instead, any
+    nonzero command starts just past the deadband and scales up to SPEED_MAX.
+    """
+    if abs(v) < 0.02:
+        return 0.0
+    return math.copysign(DEADBAND_US + abs(v) * (SPEED_MAX - DEADBAND_US), v)
+
+
 # ---------------------------------------------------------------------------
 # Camera
 # ---------------------------------------------------------------------------
 
+class FrameBroadcaster:
+    """Single capture+encode loop shared by all /stream clients.
+
+    Picamera2 isn't built for concurrent capture calls from multiple Flask
+    threads, and per-client JPEG encoding multiplies CPU load (which worsens
+    the software PWM jitter). One thread captures and encodes the latest
+    frame; every client generator just waits for the next one.
+    """
+
+    def __init__(self, camera, quality):
+        self.camera = camera
+        self.quality = quality
+        self.cond = threading.Condition()
+        self.jpeg = None
+        self.seq = 0
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while True:
+            frame = self.camera.capture_array()
+            ok, buffer = cv2.imencode('.jpg', frame,
+                                      [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+            if not ok:
+                continue
+            with self.cond:
+                self.jpeg = buffer.tobytes()
+                self.seq += 1
+                self.cond.notify_all()
+
+    def frames(self):
+        """Yield each new JPEG once (per-client generator)."""
+        last_seq = 0
+        while True:
+            with self.cond:
+                while self.seq == last_seq:
+                    self.cond.wait(1.0)
+                last_seq = self.seq
+                data = self.jpeg
+            yield data
+
+
 def init_camera(resolution, fps, quality, autofocus):
-    global camera, jpeg_quality
-    jpeg_quality = quality
+    global camera, broadcaster
 
     camera = Picamera2()
     config = camera.create_video_configuration(
@@ -76,14 +131,13 @@ def init_camera(resolution, fps, quality, autofocus):
 
     camera.start()
     time.sleep(0.5)  # let camera settle
+    broadcaster = FrameBroadcaster(camera, quality)
 
 
 def generate_frames():
-    while True:
-        frame = camera.capture_array()
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+    for jpeg in broadcaster.frames():
         yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+               b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
 
 
 @app.route('/')
@@ -107,19 +161,27 @@ def _mark_command():
 
 
 def motor_watchdog():
-    """Stop the motors if commands stop arriving (deadman switch)."""
-    stopped = True
+    """Stop the motors if commands stop arriving (deadman switch).
+
+    Starts with stopped=False so the neutral pulses from motor init get
+    disarmed after the first idle period (otherwise the motors twitch at
+    rest from boot until the first drive command comes and goes).
+    """
+    stopped = False
     while True:
         time.sleep(0.1)
         if motors is None:
             continue
-        idle = (time.monotonic() - last_command_time) > COMMAND_TIMEOUT
-        if idle and not stopped:
-            with motor_lock:
+        # Check idleness and disarm under the lock: handlers mark the
+        # timestamp inside the same lock BEFORE touching the motors, so we
+        # can't disarm a command that just landed.
+        with motor_lock:
+            idle = (time.monotonic() - last_command_time) > COMMAND_TIMEOUT
+            if idle and not stopped:
                 motors.disarm()  # cease pulses so motors don't twitch at rest
-            stopped = True
-        elif not idle:
-            stopped = False
+                stopped = True
+            elif not idle:
+                stopped = False
 
 
 @app.route('/drive', methods=['POST'])
@@ -128,10 +190,10 @@ def drive():
         return jsonify(ok=False, error="motors disabled"), 503
     data = request.get_json(force=True, silent=True) or {}
     steer = clamp(float(data.get('steer', 0.0)), -1.0, 1.0)
-    speed = clamp(float(data.get('speed', 0.0)), 0.0, 1.0)
+    speed = clamp(float(data.get('speed', 0.0)), -1.0, 1.0)
     with motor_lock:
-        motors.drive(steer=steer, speed=speed * SPEED_MAX)
-    _mark_command()
+        _mark_command()
+        motors.drive(steer=steer, speed=command_to_offset(speed))
     return jsonify(ok=True, steer=steer, speed=speed)
 
 
@@ -143,8 +205,9 @@ def tank():
     left = clamp(float(data.get('left', 0.0)), -1.0, 1.0)
     right = clamp(float(data.get('right', 0.0)), -1.0, 1.0)
     with motor_lock:
-        motors.set_motors(NEUTRAL + left * SPEED_MAX, NEUTRAL + right * SPEED_MAX)
-    _mark_command()
+        _mark_command()
+        motors.set_motors(NEUTRAL + command_to_offset(left),
+                          NEUTRAL + command_to_offset(right))
     return jsonify(ok=True, left=left, right=right)
 
 
@@ -153,8 +216,8 @@ def stop():
     if motors is None:
         return jsonify(ok=False, error="motors disabled"), 503
     with motor_lock:
+        _mark_command()
         motors.stop()
-    _mark_command()
     return jsonify(ok=True)
 
 
@@ -197,6 +260,12 @@ if __name__ == '__main__':
 
     init_camera(resolution, args.fps, args.quality, not args.no_autofocus)
     print(f"Streaming + control at http://0.0.0.0:{args.port}")
+
+    # `kill` (SIGTERM) would normally skip the finally block below; convert
+    # it to a normal exit so the motors get disarmed and GPIO released.
+    def graceful_exit(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, graceful_exit)
 
     try:
         # threaded=True so the long-lived /stream generator doesn't block

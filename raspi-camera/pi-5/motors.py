@@ -68,6 +68,10 @@ class MotorController:
         # Balance trim is applied in real-motion terms (before inversion).
         left_us = self._balance(left_us, LEFT_FWD_GAIN, LEFT_REV_GAIN)
         right_us = self._balance(right_us, RIGHT_FWD_GAIN, RIGHT_REV_GAIN)
+        # Gains >1 can push a full-scale command outside the ESC's valid
+        # pulse range; keep it in bounds.
+        left_us = max(1000, min(2000, left_us))
+        right_us = max(1000, min(2000, right_us))
         if LEFT_INVERTED:
             left_us = 3000 - left_us
         if RIGHT_INVERTED:

@@ -1,4 +1,7 @@
-opencv-python
-numpy
-ultralytics
-mediapipe
+# Pinned to known-working versions (mediapipe and ultralytics both change
+# APIs frequently). To upgrade: bump a pin, rerun the apps + eval_hands.py.
+opencv-python==4.12.0.88
+numpy==2.0.2
+ultralytics==8.4.5
+mediapipe==0.10.31
+requests==2.31.0

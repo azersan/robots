@@ -34,7 +34,7 @@ commands on the same port. A watchdog stops the motors if commands stop.
 ## Key Files
 
 **Pi 5-side (`raspi-camera/pi-5/`, deploy to Pi home dir via SSH):**
-- `robot_server.py` - **Primary server.** Combined Flask app: MJPEG stream + motor control (`/drive`, `/tank`, `/stop`, `/health`) on port 8080, with an idle watchdog. Replaces `stream.py`.
+- `robot_server.py` - **Primary server.** Combined Flask app: MJPEG stream + motor control (`/drive`, `/tank`, `/stop`, `/health`) on port 8080, with an idle watchdog. One shared capture/encode thread feeds all stream clients. Speed commands are -1..1 and mapped past the ESC deadband (~80µs), so small speeds actually move; `/drive` supports reverse. Replaces `stream.py`.
 - `motors.py` - `MotorController` (lgpio PWM). Importable module + interactive `w/a/s/d` test. Has per-motor balance trim.
 - `stream.py` - Stream-only MJPEG server (superseded by `robot_server.py`).
 
@@ -43,13 +43,14 @@ commands on the same port. A watchdog stops the motors if commands stop.
 
 **Mac-side (run locally):**
 - `raspi-camera/video_source.py` - Shared video input (webcam or Pi stream). Wraps captures in a threaded `FrameGrabber` that keeps only the newest frame (prevents lag buildup).
-- `raspi-camera/robot_client.py` - Sends drive commands to `robot_server.py` (non-blocking, rate-limited).
+- `raspi-camera/robot_client.py` - Sends drive commands to `robot_server.py`. A background worker thread coalesces commands to 15Hz (newest wins, never dropped) and sends them in order over one connection.
 - `raspi-camera/drive_keyboard.py` - Keyboard remote-control test (`w/a/s/d`) using `robot_client.py`.
-- `raspi-camera/local_cv_h264.py` - Color tracking
+- `raspi-camera/red_detect.py` - Shared red HSV ranges + blob detection (used by both color trackers; tune ranges here).
+- `raspi-camera/local_color.py` - Color tracking (formerly `local_cv_h264.py`)
 - `raspi-camera/local_yolo.py` - YOLOv8 object detection (class filtering; uses `device='mps'`, `imgsz=320`)
 - `raspi-camera/local_pose.py` - Body pose detection with gesture recognition
 - `raspi-camera/local_hands.py` - Hand gesture detection
-- `raspi-camera/local_cv.py` - Color tracking (MJPEG fallback)
+- `raspi-camera/local_cv.py` - Color tracking (older 320x240-tuned variant)
 
 ## Common Commands
 
@@ -81,7 +82,7 @@ cd raspi-camera
 python3 local_yolo.py
 python3 local_pose.py
 python3 local_hands.py
-python3 local_cv_h264.py
+python3 local_color.py
 
 # Use Mac's built-in webcam for testing
 python3 local_yolo.py --local
@@ -113,7 +114,7 @@ arp -a | grep 2c:cf:67            # Pi 5 MAC prefix (Pi Zero was b8:27:eb)
 
 ## CV Capabilities
 
-**Color Tracking** (`local_cv_h264.py`)
+**Color Tracking** (`local_color.py`)
 - HSV-based red blob detection
 - Shows mask view and tracking info
 
@@ -142,13 +143,15 @@ arp -a | grep 2c:cf:67            # Pi 5 MAC prefix (Pi Zero was b8:27:eb)
 
 ## Autonomous Behaviors
 
-### Red Object Follower (`follow_red.py`)
+### Red Object Follower (`pi-zero/follow_red.py`) — legacy Pi Zero script
 
 Runs on the Pi - uses camera to detect red objects and drives toward them.
+Written for the Pi Zero W (`pigpio`); needs porting to `lgpio` before it can
+run on the Pi 5.
 
 ```bash
-# Deploy and run
-scp raspi-camera/follow_red.py tazersky@pibot.local:~/
+# Deploy and run (Pi Zero era - pibot.local no longer exists)
+scp raspi-camera/pi-zero/follow_red.py tazersky@pibot.local:~/
 ssh tazersky@pibot.local
 python3 follow_red.py              # Normal mode
 python3 follow_red.py --debug      # Save debug frames to /tmp
@@ -157,7 +160,7 @@ python3 follow_red.py --no-motors  # Detection only, no motor output
 
 **How it works:**
 - Captures 320x240 frames from picamera2 (~10-12 FPS on Pi Zero)
-- Detects red blobs using HSV color tracking (same ranges as local_cv_h264.py)
+- Detects red blobs using HSV color tracking (same ranges as red_detect.py)
 - Proportional turning: turns faster when red is far from center, slower when close
 - Drives forward when red is centered
 - Holds last direction briefly when red is lost (0.15s for turns, 0.5s for forward)
@@ -175,12 +178,12 @@ python3 follow_red.py --no-motors  # Detection only, no motor output
 scp tazersky@pibot.local:/tmp/follow_red_debug/frame.jpg /tmp/ && open /tmp/frame.jpg
 ```
 
-### Motor Calibration (`motor_calibrate.py`)
+### Motor Calibration (`pi-zero/motor_calibrate.py`) — legacy Pi Zero script
 
 Interactive script for measuring turn angles and forward distances.
 
 ```bash
-scp raspi-camera/motor_calibrate.py tazersky@pibot.local:~/
+scp raspi-camera/pi-zero/motor_calibrate.py tazersky@pibot.local:~/
 ssh tazersky@pibot.local
 python3 motor_calibrate.py
 ```

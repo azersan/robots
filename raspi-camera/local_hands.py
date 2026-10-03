@@ -76,6 +76,21 @@ def log_gesture(gesture):
     return False
 
 
+def next_case_index(test_dir, gesture_slug):
+    """Find the next unused index for a gesture.
+
+    Scans existing case directories so a new capture session never
+    overwrites earlier test cases (numbering used to restart at 0 each run).
+    """
+    max_idx = -1
+    if os.path.isdir(test_dir):
+        for name in os.listdir(test_dir):
+            prefix = gesture_slug + "_"
+            if name.startswith(prefix) and name[len(prefix):].isdigit():
+                max_idx = max(max_idx, int(name[len(prefix):]))
+    return max_idx + 1
+
+
 def save_test_case(landmarks, handedness, frame, expected_gesture):
     """Save a test case for evaluation."""
     global capture_count
@@ -86,7 +101,7 @@ def save_test_case(landmarks, handedness, frame, expected_gesture):
 
     # Generate case ID
     gesture_slug = expected_gesture.lower().replace(" ", "_")
-    case_id = f"{gesture_slug}_{capture_count:03d}"
+    case_id = f"{gesture_slug}_{next_case_index(test_dir, gesture_slug):03d}"
     case_dir = os.path.join(test_dir, case_id)
     os.makedirs(case_dir, exist_ok=True)
 
@@ -330,7 +345,7 @@ def main():
     if not cap.isOpened():
         print(f"ERROR: Could not open video source")
         if not video_source.is_local(args):
-            print("Make sure the Pi is running stream_h264.py")
+            print("Make sure the Pi is running robot_server.py")
         return
 
     print("Connected! Try some hand gestures:")
@@ -342,7 +357,7 @@ def main():
     fps_count = 0
     fps = 0
     inference_ms = 0
-    frame_timestamp = 0
+    last_timestamp = 0
 
     while True:
         ret, frame = cap.read()
@@ -356,9 +371,12 @@ def main():
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-        # Run hand detection
+        # Run hand detection. VIDEO mode's temporal filters use the
+        # timestamps, so pass real elapsed time (strictly increasing),
+        # not an assumed frame rate.
         inference_start = time.time()
-        frame_timestamp += 33
+        frame_timestamp = max(int(time.monotonic() * 1000), last_timestamp + 1)
+        last_timestamp = frame_timestamp
         results = landmarker.detect_for_video(mp_image, frame_timestamp)
         inference_ms = (time.time() - inference_start) * 1000
 

@@ -4,72 +4,40 @@ Color tracking with local CV processing.
 Supports local webcam or remote Pi stream.
 
 Usage:
-    python3 local_cv_h264.py              # Default: Pi stream
-    python3 local_cv_h264.py --local      # Use Mac webcam
-    python3 local_cv_h264.py --source IP  # Pi at specific IP
+    python3 local_color.py              # Default: Pi stream
+    python3 local_color.py --local      # Use Mac webcam
+    python3 local_color.py --source IP  # Pi at specific IP
 """
 
 import cv2
 import numpy as np
 import time
 import video_source
+import red_detect
 
-# Color tracking settings
-RED_LOWER1 = np.array([0, 120, 70])
-RED_UPPER1 = np.array([10, 255, 255])
-RED_LOWER2 = np.array([170, 120, 70])
-RED_UPPER2 = np.array([180, 255, 255])
 MIN_AREA = 1500  # Larger for 640x480
 
 
 def process_frame(frame):
     """Detect red blobs and return annotated frame with tracking info."""
-    # Convert to HSV
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-    # Create masks for red
-    mask1 = cv2.inRange(hsv, RED_LOWER1, RED_UPPER1)
-    mask2 = cv2.inRange(hsv, RED_LOWER2, RED_UPPER2)
-    mask = cv2.bitwise_or(mask1, mask2)
-
-    # Clean up mask
-    mask = cv2.erode(mask, None, iterations=2)
-    mask = cv2.dilate(mask, None, iterations=2)
-
-    # Find contours
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    mask, blob = red_detect.largest_red_blob(frame, MIN_AREA)
 
     # Tracking info to return
     tracking = {"detected": False, "cx": 0, "cy": 0, "radius": 0, "area": 0}
 
-    if contours:
-        largest = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(largest)
+    if blob:
+        tracking.update(detected=True, cx=blob["cx"], cy=blob["cy"],
+                        radius=blob["radius"], area=blob["area"])
 
-        if area > MIN_AREA:
-            tracking["detected"] = True
-            tracking["area"] = area
+        # Draw circle and center
+        cv2.circle(frame, (int(blob["x"]), int(blob["y"])),
+                   int(blob["radius"]), (0, 255, 0), 2)
+        cv2.circle(frame, (blob["cx"], blob["cy"]), 5, (0, 255, 0), -1)
 
-            # Get bounding circle
-            ((x, y), radius) = cv2.minEnclosingCircle(largest)
-            tracking["radius"] = radius
-
-            # Get centroid
-            M = cv2.moments(largest)
-            if M["m00"] > 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                tracking["cx"] = cx
-                tracking["cy"] = cy
-
-                # Draw circle and center
-                cv2.circle(frame, (int(x), int(y)), int(radius), (0, 255, 0), 2)
-                cv2.circle(frame, (cx, cy), 5, (0, 255, 0), -1)
-
-                # Draw center line
-                frame_center = frame.shape[1] // 2
-                cv2.line(frame, (frame_center, 0), (frame_center, frame.shape[0]),
-                        (100, 100, 100), 1)
+        # Draw center line
+        frame_center = frame.shape[1] // 2
+        cv2.line(frame, (frame_center, 0), (frame_center, frame.shape[0]),
+                (100, 100, 100), 1)
 
     return frame, mask, tracking
 
@@ -157,7 +125,7 @@ def main():
     if not cap.isOpened():
         print(f"ERROR: Could not open video source")
         if not video_source.is_local(args):
-            print("Make sure the Pi is running stream_h264.py")
+            print("Make sure the Pi is running robot_server.py")
         return
 
     print("Connected! Stream should appear shortly...")

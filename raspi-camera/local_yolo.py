@@ -60,12 +60,14 @@ class DetectionTracker:
 
         return inter / union if union > 0 else 0
 
-    def _find_match(self, detection):
+    def _find_match(self, detection, exclude):
         """Find existing tracked detection that matches this one."""
         best_key = None
         best_iou = self.iou_threshold
 
         for key, tracked in self.tracked.items():
+            if key in exclude:
+                continue
             if tracked['detection']['label'] != detection['label']:
                 continue
             iou = self._iou(tracked['detection']['box'], detection['box'])
@@ -80,9 +82,11 @@ class DetectionTracker:
         self.frame_count += 1
         matched_keys = set()
 
-        # Match new detections to existing tracks
+        # Match new detections to existing tracks. Each track can absorb at
+        # most one detection per frame, otherwise two overlapping objects of
+        # the same class collapse into one and a detection is lost.
         for det in detections:
-            match_key = self._find_match(det)
+            match_key = self._find_match(det, matched_keys)
             if match_key:
                 # Update existing track
                 self.tracked[match_key]['detection'] = det
@@ -169,6 +173,18 @@ def create_side_panel(detections, fps, inference_ms, frame_height):
     return panel
 
 
+_CLASS_COLORS = {}
+
+
+def class_color(cls_id):
+    """Deterministic per-class color, computed once (don't reseed the global
+    RNG on every detection)."""
+    if cls_id not in _CLASS_COLORS:
+        rng = np.random.RandomState(cls_id)
+        _CLASS_COLORS[cls_id] = tuple(int(c) for c in rng.randint(100, 255, 3))
+    return _CLASS_COLORS[cls_id]
+
+
 def extract_detections(results):
     """Extract detection info from YOLO results."""
     detections = []
@@ -197,14 +213,10 @@ def extract_detections(results):
             if EXCLUDE_CLASSES and label in EXCLUDE_CLASSES:
                 continue
 
-            # Generate consistent color for this class
-            np.random.seed(cls_id)
-            color = tuple(int(c) for c in np.random.randint(100, 255, 3))
-
             detections.append({
                 'label': label,
                 'confidence': conf,
-                'color': color,
+                'color': class_color(cls_id),
                 'box': (x1, y1, x2, y2),
                 'cls_id': cls_id
             })
@@ -256,7 +268,7 @@ def main():
     if not cap.isOpened():
         print(f"ERROR: Could not open video source")
         if not video_source.is_local(args):
-            print("Make sure the Pi is running stream_h264.py")
+            print("Make sure the Pi is running robot_server.py")
         return
 
     print("Connected! Stream should appear shortly...")

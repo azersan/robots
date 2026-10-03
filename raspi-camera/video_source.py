@@ -32,13 +32,18 @@ class FrameGrabber:
     drains the capture continuously and keeps just the newest frame, so
     read() always returns "now" and stale frames are dropped instead of
     processed. Exposes the subset of the VideoCapture API the apps use.
+
+    read() also waits briefly for a frame it hasn't returned before, so a
+    consumer that's FASTER than the stream doesn't re-process duplicates.
     """
 
     def __init__(self, cap, warmup=3.0):
         self.cap = cap
-        self.lock = threading.Lock()
+        self.cond = threading.Condition()
         self.frame = None
         self.ret = False
+        self.seq = 0            # increments on every new frame
+        self._last_seq = 0      # last seq handed out by read()
         self.running = True
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
@@ -51,18 +56,30 @@ class FrameGrabber:
         while self.running:
             ret, frame = self.cap.read()
             if not ret:
-                with self.lock:
+                with self.cond:
                     self.ret = False
+                    self.cond.notify_all()
                 time.sleep(0.005)  # avoid busy-spin on read failure
                 continue
             # cap.read() returns a fresh array each call, so swapping the
             # reference under the lock needs no copy.
-            with self.lock:
+            with self.cond:
                 self.ret = True
                 self.frame = frame
+                self.seq += 1
+                self.cond.notify_all()
 
-    def read(self):
-        with self.lock:
+    def read(self, timeout=0.25):
+        """Return (ret, frame), waiting up to `timeout` for an unseen frame.
+
+        Returns immediately on stream failure (ret False) so reconnect logic
+        in the apps still triggers; after the timeout it returns the latest
+        frame even if already seen, so the caller's UI loop keeps running.
+        """
+        with self.cond:
+            if self.ret and self.seq == self._last_seq:
+                self.cond.wait(timeout)
+            self._last_seq = self.seq
             return self.ret, self.frame
 
     def isOpened(self):

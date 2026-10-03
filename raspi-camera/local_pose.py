@@ -64,15 +64,8 @@ def log_gesture(gesture):
 
     now = time.time()
 
-    # Only log if:
-    # 1. Different from last logged gesture, OR
-    # 2. Same gesture but enough time has passed (treat as new occurrence)
-    should_log = False
-    if gesture != last_logged_gesture:
-        should_log = True
-    elif now - last_log_time >= MIN_LOG_INTERVAL:
-        # Same gesture repeated after cooldown - could log, but skip to avoid spam
-        pass
+    # Only log when the gesture changes (repeats are skipped to avoid spam)
+    should_log = gesture != last_logged_gesture
 
     if should_log:
         timestamp = time.strftime("%H:%M:%S")
@@ -110,9 +103,12 @@ def detect_gesture(landmarks):
     left_arm_raised = left_wrist.y < (left_shoulder.y - ARM_RAISED_THRESHOLD)
     right_arm_raised = right_wrist.y < (right_shoulder.y - ARM_RAISED_THRESHOLD)
 
-    # Arm out to side detection (wrist far from shoulder)
-    left_arm_out = left_wrist.x < (left_shoulder.x - ARM_OUT_THRESHOLD)
-    right_arm_out = right_wrist.x > (right_shoulder.x + ARM_OUT_THRESHOLD)
+    # Arm out to side detection (wrist far from shoulder, away from the body).
+    # The frame is NOT mirrored, so the person's anatomical left (MediaPipe's
+    # LEFT_* landmarks) appears on the RIGHT side of the image (larger x):
+    # left arm extended outward means wrist x GREATER than shoulder x.
+    left_arm_out = left_wrist.x > (left_shoulder.x + ARM_OUT_THRESHOLD)
+    right_arm_out = right_wrist.x < (right_shoulder.x - ARM_OUT_THRESHOLD)
 
     # Gesture logic
     if left_arm_raised and right_arm_raised:
@@ -256,7 +252,7 @@ def main():
     if not cap.isOpened():
         print(f"ERROR: Could not open video source")
         if not video_source.is_local(args):
-            print("Make sure the Pi is running stream_h264.py")
+            print("Make sure the Pi is running robot_server.py")
         return
 
     print("Connected! Try some gestures:")
@@ -270,7 +266,7 @@ def main():
     fps_count = 0
     fps = 0
     inference_ms = 0
-    frame_timestamp = 0
+    last_timestamp = 0
 
     while True:
         ret, frame = cap.read()
@@ -284,9 +280,12 @@ def main():
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-        # Run pose detection
+        # Run pose detection. VIDEO mode's temporal filters use the
+        # timestamps, so pass real elapsed time (strictly increasing),
+        # not an assumed frame rate.
         inference_start = time.time()
-        frame_timestamp += 33  # ~30fps in milliseconds
+        frame_timestamp = max(int(time.monotonic() * 1000), last_timestamp + 1)
+        last_timestamp = frame_timestamp
         results = landmarker.detect_for_video(mp_image, frame_timestamp)
         inference_ms = (time.time() - inference_start) * 1000
 

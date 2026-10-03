@@ -1,1 +1,9 @@
 __pycache__/
+
+# Model weights - the apps download these on first run
+*.task
+*.pt
+
+# App screenshots saved to the working dir (test_data screenshots ARE tracked)
+/raspi-camera/*_screenshot_*.jpg
+/raspi-camera/screenshot_*.jpg

@@ -82,29 +82,6 @@ def get_straightness_ratio(landmarks, mcp: int, pip: int, dip: int, tip: int) ->
     return direct / segments
 
 
-def is_finger_straight(landmarks, mcp: int, pip: int, dip: int, tip: int) -> bool:
-    """Check if a finger is straightened by comparing direct distance to segment sum.
-
-    This is direction-agnostic: works for pointing up, down, forward, etc.
-    A straight finger has ratio close to 1.0, a bent finger has lower ratio.
-    """
-    # Direct distance from MCP to TIP
-    direct = _distance(landmarks[mcp], landmarks[tip])
-
-    # Sum of segments: MCP->PIP + PIP->DIP + DIP->TIP
-    segments = (
-        _distance(landmarks[mcp], landmarks[pip]) +
-        _distance(landmarks[pip], landmarks[dip]) +
-        _distance(landmarks[dip], landmarks[tip])
-    )
-
-    if segments < 0.01:  # Avoid division by zero
-        return False
-
-    ratio = direct / segments
-    return ratio > 0.9  # Threshold: 0.9 = straight finger
-
-
 def get_finger_extension(landmarks, tip_idx: int) -> Tuple[bool, float]:
     """Check if a finger is extended and return confidence.
 
@@ -150,30 +127,6 @@ def get_finger_extension(landmarks, tip_idx: int) -> Tuple[bool, float]:
     return False, 0.5
 
 
-def is_finger_extended(landmarks, tip_idx: int, mcp_idx: int) -> bool:
-    """Check if a finger is extended using straightness detection.
-
-    Uses joint alignment to detect extension regardless of pointing direction.
-    Falls back to y-position check for additional robustness.
-    """
-    # Map tip index to finger name
-    finger_map = {
-        INDEX_TIP: 'index',
-        MIDDLE_TIP: 'middle',
-        RING_TIP: 'ring',
-        PINKY_TIP: 'pinky',
-    }
-
-    finger = finger_map.get(tip_idx)
-    if finger and finger in FINGER_JOINTS:
-        mcp, pip, dip, tip = FINGER_JOINTS[finger]
-        return is_finger_straight(landmarks, mcp, pip, dip, tip)
-
-    # Fallback to original y-position check
-    diff = landmarks[mcp_idx].y - landmarks[tip_idx].y
-    return diff > 0.03
-
-
 def get_thumb_extension(landmarks) -> Tuple[bool, float]:
     """Check if thumb is extended and return confidence.
 
@@ -217,16 +170,6 @@ def get_thumb_extension(landmarks) -> Tuple[bool, float]:
     return is_extended, confidence
 
 
-def is_thumb_extended(landmarks) -> bool:
-    """Check if thumb is extended (away from palm).
-
-    Checks both horizontal (thumb out to side) and vertical (thumbs up/down).
-    For horizontal extension, thumb must not be curled under the palm.
-    """
-    extended, _ = get_thumb_extension(landmarks)
-    return extended
-
-
 # Minimum confidence threshold for gesture detection
 DEFAULT_CONFIDENCE_THRESHOLD = 0.45
 
@@ -240,7 +183,6 @@ MAX_Z_SPREAD_OPEN_PALM = 0.03
 MIN_FINGER_RATIO_OPEN_PALM = 0.98  # All fingers must be very straight
 MIN_INDEX_RATIO_POINTING = 0.99   # Index must be very extended for pointing
 MAX_CURLED_RATIO_ROCK_ON = 0.75   # Middle/ring must be clearly curled
-MAX_AVG_RATIO_FIST = 0.70         # Average finger ratio for fist
 
 
 def get_all_finger_ratios(landmarks) -> Dict[str, float]:
@@ -315,7 +257,6 @@ def detect_hand_gesture(landmarks, handedness: str,
 
     # Get finger ratios for additional checks
     ratios = get_all_finger_ratios(landmarks)
-    avg_ratio = sum(ratios.values()) / 4
 
     if fingers_up == 0 and not thumb_up:
         gesture = "FIST"
