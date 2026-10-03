@@ -1,8 +1,9 @@
 """Find bins in the front camera's depth image, without using their true poses.
 
 Depth pixels -> world points (using the car pose and the camera mount) -> keep points
-15 cm to 1.2 m above the ground -> grid clustering in XY -> keep clusters with a
-bin-sized footprint. Color-agnostic on purpose: real bins can be any color.
+25-80 cm above the ground (above the cart wheels, below the handle and lid) -> grid
+clustering in XY -> keep clusters with a bin-sized footprint. Color-agnostic on purpose:
+real bins can be any color.
 """
 
 import io
@@ -10,6 +11,8 @@ import math
 
 import numpy as np
 from PIL import Image
+
+BAND = (0.25, 0.80)  # m above ground
 
 
 def _rot_z(yaw):
@@ -45,7 +48,10 @@ class BinFinder:
         self.R_body_cam = camera_basis(mount["dir"])
         self.t_body_cam = np.asarray(mount["pos"])
         self.chassis_z = mount["chassis_z"]
-        self.half = info["bin"]["half_extents"]
+        types = info["bin"]["types"].values()
+        self.widths = [t["width"] for t in types]
+        # A visible side longer than this is a cart's depth (front-to-back); shorter is its width.
+        self.depth_threshold = (max(self.widths) + min(t["depth"] for t in types)) / 2 - 0.015
 
     def points(self, depth_png, car):
         """World XYZ for every valid depth pixel. Assumes the car is level (flat ground)."""
@@ -58,7 +64,7 @@ class BinFinder:
 
     def find(self, depth_png, car, cell=0.1):
         pts = self.points(depth_png, car)
-        band = pts[(pts[:, 2] > 0.15) & (pts[:, 2] < 1.2)]
+        band = pts[(pts[:, 2] > BAND[0]) & (pts[:, 2] < BAND[1])]
         if len(band) < 30:
             return []
         # Grid clustering: occupied cells, then 8-connected components.
@@ -91,7 +97,7 @@ class BinFinder:
     def _describe(self, cluster, car):
         if len(cluster) < 40:
             return None
-        if cluster[:, 2].max() < 0.7:  # bins are ~1.1 m tall
+        if cluster[:, 2].max() < BAND[1] - 0.1:  # bins fill the whole band; low junk doesn't
             return None
         xy = cluster[:, :2]
         size = xy.max(axis=0) - xy.min(axis=0)
@@ -101,13 +107,11 @@ class BinFinder:
         fit = self._fit_box(xy, np.array([car["x"], car["y"]]))
         if fit is None:
             return None
-        center, normal, extents = fit
-        face_mid = center + normal * self.half[0]
+        face_mid, normal, extents = fit
         rng = float(np.linalg.norm(face_mid - [car["x"], car["y"]]))
         return {
-            "center": center.tolist(),
-            "face_mid": face_mid.tolist(),  # center of the bin's front face, on the ground plane
-            "yaw": math.atan2(normal[1], normal[0]),  # front normal (same convention as a bin's yaw)
+            "face_mid": face_mid.tolist(),  # center of the face toward the car, on the ground plane
+            "yaw": math.atan2(normal[1], normal[0]),  # face normal toward the car (same convention as a bin's yaw)
             "extents": extents,
             "height": float(cluster[:, 2].max()),
             "range": rng,
@@ -115,12 +119,14 @@ class BinFinder:
         }
 
     def _fit_box(self, xy, car_xy):
-        """Fit the bin's known footprint to the visible points (usually one face, or an L of two).
+        """Find the cart's narrow face toward the car from its visible points (one face, or an L of two).
 
-        Orientation from the minimum-area bounding rectangle; the longer side is the bin's
-        depth axis (front-to-back), and the front is taken to be the narrow face toward the car.
+        Orientation comes from the minimum-area bounding rectangle. The longer side is the cart's
+        depth axis (front-to-back), and the face we want is the narrow one toward the car: its
+        position is the extreme visible point along the depth axis, and its lateral center is the
+        middle of the visible width (or the near edge plus half a cart width if partly hidden).
+        Returns (face_mid, normal toward car, visible extents).
         """
-        depth_len, width_len = 2 * self.half[0], 2 * self.half[1]
         best = None
         for deg in range(0, 90):
             t = math.radians(deg)
@@ -132,19 +138,20 @@ class BinFinder:
                 best = (area, e1, e2, a, b)
         _, e1, e2, a, b = best
         ext = [float(a.max() - a.min()), float(b.max() - b.min())]
-        threshold = (depth_len + width_len) / 2
-        if max(ext) >= threshold:
-            depth_axis = 0 if ext[0] >= ext[1] else 1  # we can see the full long side
+        if max(ext) >= self.depth_threshold:
+            depth_axis = 0 if ext[0] >= ext[1] else 1  # we can see a full long side
         else:
             depth_axis = 1 if ext[0] >= ext[1] else 0  # we see a narrow face head-on
         axes, proj = (e1, e2), (a, b)
-        center = np.zeros(2)
-        for k in range(2):
-            length = depth_len if k == depth_axis else width_len
-            p, c = proj[k], car_xy @ axes[k]
-            mid = (p.min() + p.max()) / 2
-            # The visible face is on the car's side; the far side is hidden, so place it by known size.
-            coord = p.min() + length / 2 if c < mid else p.max() - length / 2
-            center += coord * axes[k]
-        normal = axes[depth_axis] * (1.0 if (car_xy - center) @ axes[depth_axis] > 0 else -1.0)
-        return center, normal, ext
+        d_axis, w_axis = axes[depth_axis], axes[1 - depth_axis]
+        p_d, p_w = proj[depth_axis], proj[1 - depth_axis]
+        toward = 1.0 if car_xy @ d_axis > (p_d.min() + p_d.max()) / 2 else -1.0
+        face_d = p_d.max() if toward > 0 else p_d.min()
+        width_vis = p_w.max() - p_w.min()
+        if width_vis >= 0.9 * min(self.widths):
+            face_w = (p_w.min() + p_w.max()) / 2
+        else:  # partly hidden: hang it off the edge nearest the car
+            half = sum(self.widths) / len(self.widths) / 2
+            face_w = p_w.min() + half if car_xy @ w_axis < (p_w.min() + p_w.max()) / 2 else p_w.max() - half
+        face_mid = face_d * d_axis + face_w * w_axis
+        return face_mid, d_axis * toward, ext

@@ -7,6 +7,9 @@ they'd drive real hardware. Physics and cameras come from [Newton](https://githu
 Current scenario: a small tug drives from the garage at #11 down Anna Pl (~91 m), finds the
 trash bins at the street, docks on one, and latches on.
 
+**Controlling the sim from another program or agent? Read [AGENTS.md](AGENTS.md).** It covers
+the full API, units and frames, timing modes, camera math, and docking geometry.
+
 ```
  controllers/ (any HTTP client: scripts, policies, Claude later)
         │  HTTP
@@ -26,9 +29,16 @@ From Windows PowerShell:
 wsl -d Ubuntu-24.04 -- bash /mnt/c/Users/antho/OneDrive/Documents/GitHub/robots/sim-playground/setup_wsl.sh
 ```
 
-The venv lives at `~/venvs/simpg` on the Linux side (Python on `/mnt/c` is slow). The
-first run compiles GPU kernels for a minute or two; after that they're cached and a scene
-builds in ~2 s.
+Then fetch the CC0 photo textures (grass, concrete, asphalt, bark from ambientCG) into the
+git-ignored `assets/` folder:
+
+```powershell
+wsl -d Ubuntu-24.04 -- bash -lc "cd /mnt/c/Users/antho/OneDrive/Documents/GitHub/robots/sim-playground && ~/venvs/simpg/bin/python tools/fetch_assets.py"
+```
+
+The scenes still work without them, using flat colors. The venv lives at `~/venvs/simpg`
+on the Linux side (Python on `/mnt/c` is slow). The first run compiles GPU kernels for a
+minute or two; after that they're cached and a scene builds in ~2–5 s.
 
 ## Run
 
@@ -83,14 +93,23 @@ curl -s -X POST localhost:8642/api/drive -H 'content-type: application/json' -d 
 - `simpg/gateway.py`, `simpg/viewer.html`: HTTP API and web viewer
 - `controllers/fetch_bin.py`: route following, docking, latching
 - `controllers/perception.py`: bin detection from the depth camera (fits the bin's known footprint)
+- `simpg/meshes.py`: procedural visual meshes (carts, trees, roofs, pavement ribbons) and generated textures
 - `tools/smoke.py`: build/drive/render check without the gateway
+- `tools/beauty.py`: renders 1280×720 showcase frames from free cameras
+- `tools/fetch_assets.py`: downloads the photo textures
 
 ## Modeling notes
 
 - **Car:** differential-drive tug, about 19 kg, 0.6 × 0.4 m, 0.1 m wheels, 0.48 m track, free-rolling front ball
   caster, tow hook on the nose 8 cm off the ground.
-- **Bins:** 96-gallon carts (0.74 × 0.62 × 1.06 m, 13 kg) with a latch bar low on the front face. They're modeled
-  as sliding boxes with μ=0.25, standing in for a cart on its wheels.
+- **Bins:** a blue 96-gal recycling cart (0.86 × 0.67 × 1.10 m, 15 kg) and a gray 64-gal trash cart
+  (0.74 × 0.61 × 1.00 m, 12 kg).
+  - Visually they're modeled carts: tapered tub, lid, handle, wheels.
+  - Physically each is one sliding box with μ=0.25, standing in for a cart on its wheels.
+  - The latch bar sits low on the back (wheel/handle) side, which faces the house at the curb.
+- **Rendering:** Newton's Warp raytracer with photo textures on UV-mapped meshes, one directional sun with
+  shadows, and hemispheric ambient light. The robot and chase cameras render at 2× and downsample, because
+  the raytracer has no texture mipmaps. There are no normal or roughness maps, reflections, or bounce light.
 - **Hitch:** a stiff spring-damper between the hook and the latch bar, like a strap or clamp.
 - **Friction:** MuJoCo uses the larger of the two surfaces' μ, so the ground is kept low (0.2) and each object's
   own μ decides.
@@ -104,3 +123,5 @@ curl -s -X POST localhost:8642/api/drive -H 'content-type: application/json' -d 
 | flat (10 randomized seeds) | camera | 10/10 | ~17 s |
 | anna_pl (8 randomized seeds) | camera | 8/8 | ~86 s |
 | anna_pl (6 + 3 seeds) | truth | 9/9 | ~89 s |
+| flat, modeled carts (6 seeds) | camera | 5/6 | ~16 s |
+| anna_pl, modeled carts (5 seeds) | camera | 5/5 | ~86 s |

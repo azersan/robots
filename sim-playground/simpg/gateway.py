@@ -1,4 +1,4 @@
-﻿"""Sim Gateway: HTTP API in front of the simulator.
+"""Sim Gateway: HTTP API in front of the simulator.
 
     python -m simpg.gateway [--scene flat|anna_pl] [--port 8642] [--paused]
 

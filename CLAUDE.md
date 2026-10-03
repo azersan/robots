@@ -27,6 +27,12 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 └─────────────────────────────────────────────┘
 ```
 
+## Sim Playground
+
+`sim-playground/` is a GPU robot simulator (Newton, in WSL2 on the NZXT PC) behind an HTTP gateway on port 8642,
+with a browser viewer. It has the same kind of robot task: drive down the driveway, find the bins, latch on.
+See `sim-playground/README.md` for setup, and `sim-playground/AGENTS.md` for the API if you need to drive the sim.
+
 ## Key Files
 
 **Pi-side (deploy to Pi via SSH):**

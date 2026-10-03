@@ -37,22 +37,23 @@ ROUTE_PX = [
 
 # Where the bins sit at the bottom of Anna Pl, and which way they face (deg, 0 = east).
 BINS_PX = [(778, 1128), (752, 1134)]
-BIN_YAW_DEG = 90.0
+BIN_KINDS = ["recycling", "trash"]  # big blue 96 gal, smaller gray 64 gal
+BIN_YAW_DEG = 90.0  # wheels/handle side facing north (toward the house), lid side to the street
 
-# Paved surfaces as polylines with a width (m). Visual only; physics is a flat plane for now.
+# Paved surfaces as polylines with a width (m) and surface. Visual only; physics is a flat plane for now.
 PAVEMENT = [
     # House #11 driveway, garage apron down to the lane.
-    {"width": 5.0, "px": [(370, 130), (440, 165), (540, 270), (680, 410), (760, 470)]},
+    {"width": 5.0, "surface": "concrete", "px": [(370, 130), (440, 165), (540, 270), (680, 410), (760, 470)]},
     # Anna Pl lane, from the bend at the top right down to the street.
-    {"width": 5.5, "px": [(560, 0), (700, 120), (750, 300), (775, 470), (810, 600), (835, 760),
+    {"width": 5.5, "surface": "asphalt", "px": [(560, 0), (700, 120), (750, 300), (775, 470), (810, 600), (835, 760),
                           (855, 940), (865, 1100)]},
     # The street at the bottom (Anna Pl continues west).
-    {"width": 7.0, "px": [(1000, 1120), (800, 1130), (640, 1150), (480, 1236)]},
+    {"width": 7.0, "surface": "asphalt", "px": [(1000, 1120), (800, 1130), (640, 1150), (480, 1236)]},
 ]
 
 # Houses as (center_px, size_px (w, h), rotation deg, height m). Rough footprints.
 HOUSES = [
-    {"center": (300, 300), "size": (230, 260), "rot": 28.0, "height": 8.0},   # #11
+    {"center": (300, 300), "size": (230, 260), "rot": 28.0, "height": 8.0, "garage": True},   # #11
     {"center": (250, 720), "size": (250, 300), "rot": 22.0, "height": 8.0},   # #10
 ]
 

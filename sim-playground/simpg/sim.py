@@ -1,10 +1,11 @@
-﻿"""Newton-backed simulator for the driveway car.
+"""Newton-backed simulator for the driveway car.
 
 World frame: Z up, X east, Y north, meters. The car's body frame is X forward,
 Y left, Z up. Everything here runs on one thread at a time; the gateway holds
 a lock around every call.
 """
 
+import copy
 import math
 import random
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ import warp as wp
 import newton
 from newton.sensors import SensorTiledCamera
 
+from . import meshes
 from . import site_anna_pl as site
 
 wp.config.quiet = True
@@ -35,10 +37,28 @@ HOOK_LOCAL = (CHASSIS_HALF[0] + 0.04, 0.0, 0.08 - CHASSIS_Z0)  # 8 cm off the gr
 MAX_WHEEL_SPEED = 2.0  # m/s at the tire
 WHEEL_EFFORT = 20.0  # N*m per wheel
 
-BIN_HALF = (0.37, 0.31, 0.53)  # depth, width, height / 2
-BIN_MASS = 13.0
-LATCH_LOCAL = (BIN_HALF[0] + 0.03, 0.0, 0.08 - BIN_HALF[2])  # handle bar low on the front face
+# Wheelie carts. Body frame: +X is the back (vertical face with the wheels and handle, the side
+# that faces the house at the curb), so that's where the robot hooks on.
+BIN_TYPES = {
+    # 96 gal: ~34" deep, 26.5" wide, 43" tub + lid
+    "recycling": {"depth": 0.86, "width": 0.67, "height": 1.10, "mass": 15.0, "color": (0.10, 0.27, 0.62)},
+    # 64 gal: ~29" deep, 24" wide, 40" tub + lid
+    "trash": {"depth": 0.74, "width": 0.61, "height": 1.00, "mass": 12.0, "color": (0.40, 0.42, 0.44)},
+}
+LATCH_OUT = 0.06  # latch bar sits this far behind the back face (between the wheels)
+LATCH_Z = 0.08  # and this high off the ground
 LATCH_RANGE = 0.08  # hook must be this close to a latch bar to engage
+CART_WHEEL_R = 0.10
+
+
+def bin_half(kind):
+    t = BIN_TYPES[kind]
+    return (t["depth"] / 2, t["width"] / 2, t["height"] / 2)
+
+
+def latch_local(kind):
+    hx, _, hz = bin_half(kind)
+    return (hx + LATCH_OUT, 0.0, LATCH_Z - hz)
 
 HITCH_K = 4000.0
 HITCH_C = 150.0
@@ -50,9 +70,13 @@ SUBSTEPS = 10
 # object's own mu (tires 1.0, bin 0.25, ...) decides.
 GROUND_CFG = newton.ModelBuilder.ShapeConfig(mu=0.2, gap=0.01)
 
-GRASS = (0.33, 0.47, 0.22)
-ASPHALT = (0.36, 0.36, 0.38)
-SKY = 0xFFEBC396  # packed 0xAABBGGRR
+SKY = 0xFFEBCDA8  # packed 0xAABBGGRR: a hazy afternoon blue
+SUN_DIR = (0.48, 0.55, -0.68)  # direction the light travels: sun in the south-west, ~43 deg up
+SUPERSAMPLE = {"front": 2, "chase": 2, "overhead": 1}  # renders at N x N and downsamples (no texture mipmaps)
+
+# Fallback flat colors when the photo textures haven't been fetched (tools/fetch_assets.py).
+FALLBACK = {"grass": (0.33, 0.47, 0.22), "concrete": (0.70, 0.68, 0.64), "asphalt": (0.36, 0.36, 0.38),
+            "bark": (0.30, 0.22, 0.14)}
 
 # Front camera mount in the chassis frame: position and look direction (pitched down ~7 deg).
 FRONT_CAM_POS = (CHASSIS_HALF[0] + 0.01, 0.0, CHASSIS_HALF[2] + 0.06)
@@ -187,37 +211,192 @@ def add_car(builder, x, y, yaw):
     return chassis, joints[0], drive
 
 
-def add_bin(builder, x, y, yaw, color, label):
-    hx, hy, hz = BIN_HALF
-    vol = 8 * hx * hy * hz
+_ROT_X90 = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), 0.5 * math.pi)
+
+
+class Look:
+    """Textures shared across a scene (loaded once; None means "use a flat color")."""
+
+    def __init__(self):
+        rgba = meshes.rgba
+        self.photo = {k: rgba(meshes.texture(k)) for k in FALLBACK}
+        if self.photo["grass"] is not None:
+            self.photo["grass"] = meshes.grade(self.photo["grass"], saturation=0.7, gain=(1.0, 0.92, 0.75))
+        self.leaves = rgba(meshes.leaves_texture())
+        self.plastic = rgba(meshes.plastic_texture())
+        self.siding = rgba(meshes.siding_texture())
+        self.shingles = rgba(meshes.shingles_texture())
+
+    def surface(self, kind):
+        """(texture, color) for a ground surface: the photo as-is, or a flat fallback color."""
+        tex = self.photo[kind]
+        return (tex, (1.0, 1.0, 1.0)) if tex is not None else (None, FALLBACK[kind])
+
+
+def add_bin(builder, x, y, yaw, kind, label, look):
+    t = BIN_TYPES[kind]
+    hx, hy, hz = bin_half(kind)
     body = builder.add_link(xform=wp.transform(p=wp.vec3(x, y, hz + 0.002), q=_quat_z(yaw)), label=label)
-    # Low effective friction: a real cart rides on its rear wheels with only the front lip sliding.
-    cfg = newton.ModelBuilder.ShapeConfig(density=BIN_MASS / vol, mu=0.25, gap=0.01)
-    builder.add_shape_box(body, hx=hx, hy=hy, hz=hz, cfg=cfg, color=color, label=label)
-    # Lid and the latch bar the hook grabs.
-    builder.add_shape_box(
-        body, xform=wp.transform(p=wp.vec3(0.03, 0.0, hz + 0.02)), hx=hx + 0.04, hy=hy + 0.01, hz=0.02,
-        cfg=_visual(), color=tuple(0.8 * c for c in color), label=f"{label}_lid",
-    )
+    # Physics: one box. Low effective friction: a real cart rides on its wheels with only the lip sliding.
+    cfg = newton.ModelBuilder.ShapeConfig(density=t["mass"] / (8 * hx * hy * hz), mu=0.25, gap=0.01)
+    hidden = copy.copy(cfg)
+    hidden.is_visible = False
+    builder.add_shape_box(body, hx=hx, hy=hy, hz=hz, cfg=hidden, label=label)
+
+    color = t["color"]
+    dark = (0.07, 0.07, 0.08)
+    # Tub, lid, handle.
+    tub = meshes.cart_body(t["depth"], t["width"], t["height"] - 0.04)
+    tub.texture = look.plastic
+    builder.add_shape_mesh(body, xform=wp.transform(p=wp.vec3(0.0, 0.0, -hz)), mesh=tub, cfg=_visual(),
+                           color=color, label=f"{label}_tub")
+    lid = meshes.cart_lid(t["depth"], t["width"])
+    lid.texture = look.plastic
+    builder.add_shape_mesh(body, xform=wp.transform(p=wp.vec3(-0.01, 0.0, hz - 0.04)), mesh=lid, cfg=_visual(),
+                           color=tuple(0.85 * c for c in color), label=f"{label}_lid")
     builder.add_shape_capsule(
-        body, xform=wp.transform(p=wp.vec3(*LATCH_LOCAL), q=wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), 0.5 * math.pi)),
-        radius=0.015, half_height=hy * 0.6, cfg=_visual(), color=(0.15, 0.15, 0.15), label=f"{label}_latch",
+        body, xform=wp.transform(p=wp.vec3(hx + 0.035, 0.0, hz - 0.07), q=_ROT_X90),
+        radius=0.018, half_height=hy * 0.75, cfg=_visual(), color=tuple(0.8 * c for c in color),
+        label=f"{label}_handle",
     )
+    for s in (-1.0, 1.0):  # handle side arms
+        builder.add_shape_box(
+            body, xform=wp.transform(p=wp.vec3(hx + 0.018, s * hy * 0.75, hz - 0.11)), hx=0.018, hy=0.02, hz=0.05,
+            cfg=_visual(), color=tuple(0.8 * c for c in color), label=f"{label}_handle_arm",
+        )
+    # Wheels and axle at the back bottom, and the latch bar between them.
+    wheel_x = hx - 0.02
+    for s in (-1.0, 1.0):
+        builder.add_shape_cylinder(
+            body, xform=wp.transform(p=wp.vec3(wheel_x, s * (hy - 0.035), CART_WHEEL_R - hz), q=_ROT_X90),
+            radius=CART_WHEEL_R, half_height=0.03, cfg=_visual(), color=dark, label=f"{label}_wheel",
+        )
+        builder.add_shape_cylinder(
+            body, xform=wp.transform(p=wp.vec3(wheel_x, s * (hy - 0.005), CART_WHEEL_R - hz), q=_ROT_X90),
+            radius=0.035, half_height=0.004, cfg=_visual(), color=(0.55, 0.55, 0.57), label=f"{label}_hub",
+        )
+    builder.add_shape_capsule(
+        body, xform=wp.transform(p=wp.vec3(wheel_x, 0.0, CART_WHEEL_R - hz), q=_ROT_X90),
+        radius=0.012, half_height=hy - 0.07, cfg=_visual(), color=(0.45, 0.45, 0.47), label=f"{label}_axle",
+    )
+    lx, _, lz = latch_local(kind)
+    builder.add_shape_capsule(
+        body, xform=wp.transform(p=wp.vec3(lx, 0.0, lz), q=_ROT_X90),
+        radius=0.012, half_height=0.12, cfg=_visual(), color=(0.75, 0.62, 0.10), label=f"{label}_latch",
+    )
+    for s in (-1.0, 1.0):  # brackets holding the latch bar off the tub
+        builder.add_shape_box(
+            body, xform=wp.transform(p=wp.vec3((hx + lx) / 2, s * 0.12, lz)), hx=(lx - hx) / 2 + 0.01, hy=0.01,
+            hz=0.012, cfg=_visual(), color=(0.75, 0.62, 0.10), label=f"{label}_latch_bracket",
+        )
     joint = builder.add_joint_free(body, label=f"{label}_free")
     builder.add_articulation([joint], label=label)
     return body, joint
 
 
-def _segments_box(builder, pts, width, z, color, label):
-    for i, (a, b) in enumerate(zip(pts, pts[1:])):
-        dx, dy = b[0] - a[0], b[1] - a[1]
-        length = math.hypot(dx, dy)
-        cx, cy = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-        # Overlap segments a bit so bends have no gaps.
-        builder.add_shape_box(
-            -1, xform=wp.transform(p=wp.vec3(cx, cy, z), q=_quat_z(math.atan2(dy, dx))),
-            hx=length / 2 + width * 0.3, hy=width / 2, hz=0.002, cfg=_visual(), color=color, label=f"{label}_{i}",
-        )
+def add_ground(builder, look, bounds, margin=250.0):
+    """Invisible physics plane plus a textured grass quad well past the horizon trees."""
+    plane = copy.copy(GROUND_CFG)
+    plane.is_visible = False
+    builder.add_ground_plane(cfg=plane)
+    x0, y0, x1, y1 = bounds
+    tex, color = look.surface("grass")
+    builder.add_shape_mesh(
+        -1, mesh=meshes.ground_quad(x0 - margin, y0 - margin, x1 + margin, y1 + margin, tile=2.0, tex=tex),
+        cfg=_visual(), color=color, label="grass",
+    )
+
+
+def add_treeline(builder, look, bounds, rng, inner=35.0, outer=70.0, count=140):
+    """A ring of big crowns around the lot so the horizon reads as woods, not the edge of the world."""
+    x0, y0, x1, y1 = bounds
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
+    tex, color = look.surface("bark")
+    for i in range(count):
+        a = 2 * math.pi * (i + rng.random()) / count
+        d = rng.uniform(inner, outer)
+        x, y = cx + (rx + d) * math.cos(a), cy + (ry + d) * math.sin(a)
+        height = rng.uniform(14.0, 22.0)
+        trunk = meshes.tapered_cylinder(0.35, 0.18, height * 0.7, segments=8, tile=(0.8, 1.5), tex=tex)
+        builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, 0.0)), mesh=trunk, cfg=_visual(),
+                               color=tuple(0.8 * c for c in color), label=f"edge{i}_bark")
+        crown = meshes.canopy(rng.uniform(5.5, 8.5), np.random.default_rng(rng.randrange(1 << 30)), lobes=6,
+                              tex=look.leaves)
+        tint = (rng.uniform(0.75, 1.0), rng.uniform(0.8, 1.05), rng.uniform(0.65, 0.95))
+        builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, height * 0.65)), mesh=crown, cfg=_visual(),
+                               color=tint, label=f"edge{i}_crown")
+
+
+def add_pavement(builder, look, pts, width, kind, z, label, tile=3.0):
+    tex, color = look.surface(kind)
+    builder.add_shape_mesh(-1, mesh=meshes.ribbon(pts, width, tile, z=z, tex=tex), cfg=_visual(), color=color,
+                           label=label)
+
+
+def add_tree(builder, look, x, y, rng, label):
+    height = rng.uniform(11.0, 20.0)
+    r = rng.uniform(0.16, 0.38)
+    # Physics: a plain cylinder. Visual: tapered bark trunk and a clumpy crown up high.
+    builder.add_shape_cylinder(
+        -1, xform=wp.transform(p=wp.vec3(x, y, 1.5)), radius=r, half_height=1.5,
+        cfg=newton.ModelBuilder.ShapeConfig(mu=0.8, gap=0.01, is_visible=False), label=f"{label}_trunk",
+    )
+    tex, color = look.surface("bark")
+    trunk = meshes.tapered_cylinder(r, r * 0.5, height * 0.75, segments=12, tile=(0.6, 1.2), tex=tex,
+                                    jitter=0.06, rng=rng)
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, 0.0)), mesh=trunk, cfg=_visual(),
+                           color=tuple(c * rng.uniform(0.75, 1.0) for c in color), label=f"{label}_bark")
+    crown = meshes.canopy(rng.uniform(3.5, 5.5), np.random.default_rng(rng.randrange(1 << 30)), lobes=7,
+                          tex=look.leaves)
+    tint = (rng.uniform(0.8, 1.05), rng.uniform(0.85, 1.1), rng.uniform(0.7, 1.0))
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, height * 0.68)), mesh=crown, cfg=_visual(),
+                           color=tint, label=f"{label}_crown")
+
+
+def add_house(builder, look, cx, cy, length, width, rot, wall_h, label, garage=False):
+    """Box house with siding, a gable roof, windows, and optionally two garage doors on the +X end."""
+    q = _quat_z(rot)
+    # Physics: one box.
+    builder.add_shape_box(
+        -1, xform=wp.transform(p=wp.vec3(cx, cy, wall_h / 2), q=q), hx=length / 2, hy=width / 2, hz=wall_h / 2,
+        cfg=newton.ModelBuilder.ShapeConfig(gap=0.01, is_visible=False), label=label,
+    )
+    walls = meshes.loft([(0.0, meshes._rounded_rect(length / 2, width / 2, 0.01, n=1)),
+                         (wall_h, meshes._rounded_rect(length / 2, width / 2, 0.01, n=1))], tile=2.0, cap_bottom=False)
+    walls.texture = look.siding
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(cx, cy, 0.0), q=q), mesh=walls, cfg=_visual(),
+                           color=(0.86, 0.84, 0.78), label=f"{label}_walls")
+    roof = meshes.gable_roof(length, width, rise=width * 0.3)
+    roof.texture = look.shingles
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(cx, cy, wall_h), q=q), mesh=roof, cfg=_visual(),
+                           color=(0.30, 0.29, 0.30), label=f"{label}_roof")
+
+    def on_wall(lx, ly, lz):
+        c, s = math.cos(rot), math.sin(rot)
+        return wp.vec3(cx + c * lx - s * ly, cy + s * lx + c * ly, lz)
+
+    win = (0.12, 0.15, 0.18)
+    trim = (0.95, 0.95, 0.93)
+    for side in (-1.0, 1.0):
+        for k in range(-2, 3):
+            for z in (1.4, wall_h - 1.6):
+                lx = k * length / 5.5
+                p = on_wall(lx, side * (width / 2 + 0.02), z)
+                builder.add_shape_box(-1, xform=wp.transform(p=p, q=q), hx=0.55, hy=0.03, hz=0.7, cfg=_visual(),
+                                      color=trim, label=f"{label}_trim")
+                p = on_wall(lx, side * (width / 2 + 0.05), z)
+                builder.add_shape_box(-1, xform=wp.transform(p=p, q=q), hx=0.45, hy=0.02, hz=0.6, cfg=_visual(),
+                                      color=win, label=f"{label}_window")
+    if garage:
+        for k in (-1.0, 1.0):
+            p = on_wall(length / 2 + 0.03, k * min(1.6, width / 4), 1.1)
+            builder.add_shape_box(-1, xform=wp.transform(p=p, q=q), hx=0.03, hy=1.25, hz=1.1, cfg=_visual(),
+                                  color=(0.92, 0.92, 0.90), label=f"{label}_garage")
+            for j in range(4):  # door panel seams
+                p = on_wall(length / 2 + 0.065, k * min(1.6, width / 4), 0.3 + j * 0.55)
+                builder.add_shape_box(-1, xform=wp.transform(p=p, q=q), hx=0.005, hy=1.2, hz=0.012, cfg=_visual(),
+                                      color=(0.7, 0.7, 0.68), label=f"{label}_garage_seam")
 
 
 def _dist_to_polyline(p, pts):
@@ -231,35 +410,39 @@ def _dist_to_polyline(p, pts):
     return best
 
 
-def build_flat(builder, rng):
-    builder.add_ground_plane(color=GRASS, cfg=GROUND_CFG)
-    _segments_box(builder, [(-3.0, 0.0), (12.0, 0.0)], 3.0, 0.004, ASPHALT, "pad")
+def build_flat(builder, rng, look):
+    bounds = (-4.0, -6.0, 12.0, 6.0)
+    add_ground(builder, look, bounds)
+    add_pavement(builder, look, [(-3.0, 0.0), (12.0, 0.0)], 3.2, "concrete", 0.004, "pad", tile=2.5)
     return SceneSpec(
         name="flat",
         start=(0.0, 0.0, 0.0),
-        bins=[(8.0, 0.6, math.pi, (0.12, 0.30, 0.16)), (8.0, -0.6, math.pi, (0.12, 0.25, 0.55))],
+        bins=[(8.0, 0.65, math.pi, "recycling"), (8.0, -0.6, math.pi, "trash")],
         route=[(0.0, 0.0), (6.5, 0.6)],
-        bounds=(-4.0, -6.0, 12.0, 6.0),
+        bounds=bounds,
     )
 
 
-def build_anna_pl(builder, rng):
-    builder.add_ground_plane(color=GRASS, cfg=GROUND_CFG)
+def build_anna_pl(builder, rng, look):
+    route = site.route_m()
+    xs = [p[0] for p in route]
+    ys = [p[1] for p in route]
+    bounds = (min(xs) - 15, min(ys) - 10, max(xs) + 15, max(ys) + 10)
+    add_ground(builder, look, bounds)
+
     paved = []
     for i, road in enumerate(site.PAVEMENT):
         pts = [site.px_to_m(p) for p in road["px"]]
         paved.append((pts, road["width"]))
-        _segments_box(builder, pts, road["width"], 0.004 + 0.001 * i, ASPHALT, f"road{i}")
+        add_pavement(builder, look, pts, road["width"], road["surface"], 0.004 + 0.001 * i, f"road{i}",
+                     tile=2.5 if road["surface"] == "concrete" else 4.0)
 
     for i, h in enumerate(site.HOUSES):
         cx, cy = site.px_to_m(h["center"])
         w, d = (s * site.M_PER_PX for s in h["size"])
-        builder.add_shape_box(
-            -1, xform=wp.transform(p=wp.vec3(cx, cy, h["height"] / 2), q=_quat_z(math.radians(-h["rot"]))),
-            hx=w / 2, hy=d / 2, hz=h["height"] / 2, color=(0.78, 0.76, 0.72), label=f"house{i}",
-        )
+        add_house(builder, look, cx, cy, d, w, math.radians(90 - h["rot"]), h["height"] - 2.5, f"house{i}",
+                  garage=h.get("garage", False))
 
-    trunk_cfg = newton.ModelBuilder.ShapeConfig(mu=0.8, gap=0.01)
     n = 0
     for (cpx, r_px) in site.TREE_CLUSTERS:
         c = site.px_to_m(cpx)
@@ -269,31 +452,12 @@ def build_anna_pl(builder, rng):
             p = (c[0] + d * math.cos(a), c[1] + d * math.sin(a))
             if any(_dist_to_polyline(p, pts) < w / 2 + 1.5 for pts, w in paved):
                 continue
-            height = rng.uniform(6.0, 14.0)
-            crown = rng.uniform(2.0, 3.5)
-            builder.add_shape_cylinder(
-                -1, xform=wp.transform(p=wp.vec3(p[0], p[1], height / 2)), radius=rng.uniform(0.12, 0.3),
-                half_height=height / 2, cfg=trunk_cfg, color=(0.30, 0.22, 0.14), label=f"trunk{n}",
-            )
-            builder.add_shape_sphere(
-                -1, xform=wp.transform(p=wp.vec3(p[0], p[1], height)), radius=crown, cfg=_visual(),
-                color=(0.13 + rng.uniform(-0.03, 0.03), 0.30 + rng.uniform(-0.05, 0.05), 0.12), label=f"crown{n}",
-            )
+            add_tree(builder, look, p[0], p[1], rng, f"tree{n}")
             n += 1
 
-    route = site.route_m()
-    bins = []
-    for (bx, by), color in zip(site.bins_m(), [(0.12, 0.30, 0.16), (0.12, 0.25, 0.55)]):
-        bins.append((bx, by, math.radians(site.BIN_YAW_DEG), color))
-    xs = [p[0] for p in route]
-    ys = [p[1] for p in route]
-    return SceneSpec(
-        name="anna_pl",
-        start=site.start_pose(),
-        bins=bins,
-        route=route,
-        bounds=(min(xs) - 15, min(ys) - 10, max(xs) + 15, max(ys) + 10),
-    )
+    add_treeline(builder, look, bounds, rng)
+    bins = [(bx, by, math.radians(site.BIN_YAW_DEG), kind) for (bx, by), kind in zip(site.bins_m(), site.BIN_KINDS)]
+    return SceneSpec(name="anna_pl", start=site.start_pose(), bins=bins, route=route, bounds=bounds)
 
 
 SCENES = {"flat": build_flat, "anna_pl": build_anna_pl}
@@ -311,7 +475,7 @@ def hitch_force(
     body_f: wp.array[wp.spatial_vector],
     hitch: wp.array[wp.int32],  # [car_body, bin_body or -1]
     hook_local: wp.vec3,
-    latch_local: wp.vec3,
+    latch_local: wp.array[wp.vec3],  # [latch point in the latched bin's frame]
     k: float,
     c: float,
 ):
@@ -322,7 +486,7 @@ def hitch_force(
     qa = body_q[a]
     qb = body_q[b]
     pa = wp.transform_point(qa, hook_local)
-    pb = wp.transform_point(qb, latch_local)
+    pb = wp.transform_point(qb, latch_local[0])
     ca = wp.transform_point(qa, body_com[a])
     cb = wp.transform_point(qb, body_com[b])
     va = wp.spatial_top(body_qd[a]) + wp.cross(wp.spatial_bottom(body_qd[a]), pa - ca)
@@ -347,15 +511,15 @@ class Sim:
         rng = random.Random(seed)
         builder = newton.ModelBuilder()
         builder.default_joint_cfg.damping = 0.01
-        self.spec = SCENES[scene](builder, rng)
-        self.ground_shapes = [0]
+        look = Look()
+        self.spec = SCENES[scene](builder, rng, look)
 
         sx, sy, syaw = self.spec.start
         self.car, self.car_joint, self.drive_joints = add_car(builder, sx, sy, syaw)
         self.bins = []
-        for i, (bx, by, byaw, color) in enumerate(self.spec.bins):
-            body, joint = add_bin(builder, bx, by, byaw, color, f"bin{i}")
-            self.bins.append({"body": body, "joint": joint})
+        for i, (bx, by, byaw, kind) in enumerate(self.spec.bins):
+            body, joint = add_bin(builder, bx, by, byaw, kind, f"bin{i}", look)
+            self.bins.append({"body": body, "joint": joint, "kind": kind, "latch": latch_local(kind)})
 
         self.model = builder.finalize()
         self.device = self.model.device
@@ -379,6 +543,7 @@ class Sim:
         self.joint_q_init = self.model.joint_q.numpy().copy()
 
         self.hitch = wp.array([self.car, -1], dtype=wp.int32, device=self.device)
+        self.hitch_latch = wp.zeros(1, dtype=wp.vec3, device=self.device)
         self._target_qd = np.zeros(self.model.joint_dof_count, dtype=np.float32)
 
         self._init_cameras()
@@ -389,15 +554,20 @@ class Sim:
         self.camera = SensorTiledCamera(model=self.model)
         cfg = self.camera.default_render_config
         cfg.enable_shadows = True
-        self.camera.utils.create_default_light(enable_shadows=True)
+        cfg.enable_textures = True
+        cfg.enable_backface_culling = False  # procedural meshes don't guarantee winding
+        d = np.asarray(SUN_DIR, np.float32)
+        self.camera.utils.create_default_light(enable_shadows=True, direction=wp.vec3f(*(d / np.linalg.norm(d))))
         self.clear = SensorTiledCamera.ClearData(clear_color=SKY, clear_albedo=SKY)
         self.cam_buffers = {}
+        u = self.camera.utils
         for name, (w, h, fov) in CAMERAS.items():
-            u = self.camera.utils
+            ss = SUPERSAMPLE.get(name, 1)
             self.cam_buffers[name] = {
-                "rays": u.compute_camera_rays_pinhole(w, h, camera_fovs=math.radians(fov)),
-                "color": u.create_color_image_output(w, h, 1),
-                "depth": u.create_depth_image_output(w, h, 1),
+                "ss": ss,
+                "rays": u.compute_camera_rays_pinhole(w * ss, h * ss, camera_fovs=math.radians(fov)),
+                "color": u.create_color_image_output(w * ss, h * ss, 1),
+                "depth": u.create_depth_image_output(w * ss, h * ss, 1),
             }
 
     def _capture(self):
@@ -416,7 +586,7 @@ class Sim:
             wp.launch(
                 hitch_force, dim=1,
                 inputs=[self.state_0.body_q, self.state_0.body_qd, self.model.body_com, self.state_0.body_f,
-                        self.hitch, wp.vec3(*HOOK_LOCAL), wp.vec3(*LATCH_LOCAL), HITCH_K, HITCH_C],
+                        self.hitch, wp.vec3(*HOOK_LOCAL), self.hitch_latch, HITCH_K, HITCH_C],
             )
             self.collision.collide(self.state_0, self.contacts)
             self.solver.step(self.state_0, self.state_1, self.control, self.contacts, dt)
@@ -450,13 +620,13 @@ class Sim:
             sy += rng.uniform(-0.5, 0.5)
             syaw += math.radians(rng.uniform(-15, 15))
         place(self.car_q0, sx, sy, CHASSIS_Z0, syaw)
-        for b, (bx, by, byaw, _c) in zip(self.bins, self.spec.bins):
+        for b, (bx, by, byaw, kind) in zip(self.bins, self.spec.bins):
             if randomize:
                 # Bins sit side by side, so keep the jitter small enough that they never overlap.
                 bx += rng.uniform(-0.25, 0.25)
                 by += rng.uniform(-0.15, 0.15)
                 byaw += math.radians(rng.uniform(-20, 20))
-            place(b["q0"], bx, by, BIN_HALF[2] + 0.002, byaw)
+            place(b["q0"], bx, by, bin_half(kind)[2] + 0.002, byaw)
 
         qd = np.zeros(self.model.joint_dof_count, dtype=np.float32)
         for st in (self.state_0, self.state_1):
@@ -496,7 +666,9 @@ class Sim:
             return {"latched": None}
         best = self.nearest_latch()
         if best["distance"] <= LATCH_RANGE:
-            self.hitch.assign(np.array([self.car, self.bins[best["bin"]]["body"]], dtype=np.int32))
+            b = self.bins[best["bin"]]
+            self.hitch_latch.assign(np.array([b["latch"]], dtype=np.float32))
+            self.hitch.assign(np.array([self.car, b["body"]], dtype=np.int32))
             self.latched_bin = best["bin"]
         return {"latched": self.latched_bin, "nearest": best}
 
@@ -505,7 +677,7 @@ class Sim:
         hook = self._world_point(bq[self.car], HOOK_LOCAL)
         best = {"bin": None, "distance": math.inf}
         for i, b in enumerate(self.bins):
-            d = float(np.linalg.norm(hook - self._world_point(bq[b["body"]], LATCH_LOCAL)))
+            d = float(np.linalg.norm(hook - self._world_point(bq[b["body"]], b["latch"])))
             if d < best["distance"]:
                 best = {"bin": i, "distance": d}
         return best
@@ -541,9 +713,9 @@ class Sim:
         for i, b in enumerate(self.bins):
             t = bq[b["body"]]
             out["bins"].append({
-                "id": i, "x": float(t[0]), "y": float(t[1]), "yaw": _yaw_of(t[3:7]),
+                "id": i, "kind": b["kind"], "x": float(t[0]), "y": float(t[1]), "yaw": _yaw_of(t[3:7]),
                 "upright": float(_rotate(t[3:7], (0.0, 0.0, 1.0))[2]),
-                "latch": self._world_point(t, LATCH_LOCAL).tolist(),
+                "latch": self._world_point(t, b["latch"]).tolist(),
             })
         return out
 
@@ -560,7 +732,10 @@ class Sim:
             "fps": FPS,
             "car": {"wheel_radius": WHEEL_RADIUS, "track": TRACK, "max_wheel_speed": MAX_WHEEL_SPEED,
                     "hook_local": HOOK_LOCAL},
-            "bin": {"half_extents": BIN_HALF, "latch_local": LATCH_LOCAL, "latch_range": LATCH_RANGE},
+            # Bin yaw points out of the back face (wheels/handle side), where the latch bar is.
+            "bin": {"types": {k: {"depth": t["depth"], "width": t["width"], "height": t["height"]}
+                              for k, t in BIN_TYPES.items()},
+                    "latch_out": LATCH_OUT, "latch_z": LATCH_Z, "latch_range": LATCH_RANGE},
         }
 
     def _camera_pose(self, name, car):
@@ -581,16 +756,37 @@ class Sim:
             target = eye - np.array([0.0, 0.0, 1.0])
         return eye, look_at_quat(eye, target)
 
+    def render_view(self, eye, target, width=960, height=540, fov=50.0, ss=2):
+        """Free camera at `eye` looking at `target` (world meters). Returns rgb uint8 HxWx3."""
+        key = ("view", width, height, fov, ss)
+        if key not in self.cam_buffers:
+            u = self.camera.utils
+            self.cam_buffers[key] = {
+                "ss": ss,
+                "rays": u.compute_camera_rays_pinhole(width * ss, height * ss, camera_fovs=math.radians(fov)),
+                "color": u.create_color_image_output(width * ss, height * ss, 1),
+                "depth": u.create_depth_image_output(width * ss, height * ss, 1),
+            }
+        return self._render_buf(self.cam_buffers[key], width, height, np.asarray(eye, float),
+                                look_at_quat(eye, target))[0]
+
     def render(self, name):
         """Returns (rgb uint8 HxWx3, depth float32 HxW meters, -1 = no hit)."""
-        buf = self.cam_buffers[name]
         car = self.state_0.body_q.numpy()[self.car]
         eye, quat = self._camera_pose(name, car)
+        w, h, _ = CAMERAS[name]
+        return self._render_buf(self.cam_buffers[name], w, h, eye, quat)
+
+    def _render_buf(self, buf, w, h, eye, quat):
         tf = wp.array([[wp.transformf(wp.vec3f(*eye), wp.quatf(*quat))]], dtype=wp.transformf, device=self.device)
         self.model.bvh_refit_shapes(self.state_0)
         self.camera.update(
             self.state_0, tf, buf["rays"], color_image=buf["color"], depth_image=buf["depth"], clear_data=self.clear,
         )
-        w, h, _ = CAMERAS[name]
-        rgba = buf["color"].numpy().view(np.uint8).reshape(h, w, 4)
-        return rgba[..., :3].copy(), buf["depth"].numpy().reshape(h, w).copy()
+        ss = buf["ss"]
+        rgb = buf["color"].numpy().view(np.uint8).reshape(h * ss, w * ss, 4)[..., :3]
+        depth = buf["depth"].numpy().reshape(h * ss, w * ss)
+        if ss > 1:
+            rgb = rgb.reshape(h, ss, w, ss, 3).mean(axis=(1, 3)).astype(np.uint8)
+            depth = depth[ss // 2::ss, ss // 2::ss]  # nearest sample: averaging would blur edges into fake depths
+        return np.ascontiguousarray(rgb), np.ascontiguousarray(depth)

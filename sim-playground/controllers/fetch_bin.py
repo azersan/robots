@@ -25,7 +25,6 @@ V_CRUISE = 1.2
 V_DOCK = 0.25
 PREDOCK = 1.2  # m in front of the latch bar to line up before the final approach
 LOOKAHEAD = 1.2
-LATCH_OUT = 0.03  # latch bar sits this far proud of the bin's front face
 SEARCH_RADIUS = 12.0  # start looking for bins this close to the end of the route
 FREEZE_RANGE = 0.9  # stop updating the camera estimate this close (face fills the view)
 
@@ -61,6 +60,7 @@ class CameraSensor:
 
     def __init__(self, info):
         self.finder = BinFinder(info)
+        self.latch_out = info["bin"]["latch_out"]  # latch bar sits this far out from the face we dock on
         self.target = None
         self.sightings = 0
 
@@ -81,7 +81,7 @@ class CameraSensor:
             if math.dist(pick["face_mid"], (lx, ly)) > 0.8:
                 return self.target  # lost it in clutter; keep the old estimate
         n = (math.cos(pick["yaw"]), math.sin(pick["yaw"]))
-        new = {"latch": [pick["face_mid"][0] + n[0] * LATCH_OUT, pick["face_mid"][1] + n[1] * LATCH_OUT],
+        new = {"latch": [pick["face_mid"][0] + n[0] * self.latch_out, pick["face_mid"][1] + n[1] * self.latch_out],
                "yaw": pick["yaw"]}
         if self.target is not None and phase != "align":
             # Light smoothing; yaw blended on the circle.
