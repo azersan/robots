@@ -36,8 +36,15 @@ builds in ~2 s.
 wsl -d Ubuntu-24.04 -- bash /mnt/c/Users/antho/OneDrive/Documents/GitHub/robots/sim-playground/run_gateway.sh --scene anna_pl
 ```
 
-Open http://localhost:8642/ for the viewer (chase + front cameras, map, state). Click the
-page, then drive with W/A/S/D, Space to stop, L to latch.
+Open http://localhost:8642/ for the viewer (chase + front cameras, map, state). Drive with
+the on-screen pad (drag up = forward, sideways = turn; release = stop) or, on a keyboard,
+W/A/S/D, Space to stop, L to latch. Touching the pad switches the sim to real time.
+
+**From your phone (Tailscale):** https://aazersky-nzxt.tail3f88ef.ts.net:8443/ is proxied to
+the gateway by `tailscale serve` (tailnet only). Set up once with
+`tailscale serve --bg --https=8443 http://127.0.0.1:8642`; remove with
+`tailscale serve --https=8443 off`. It's needed because WSL's NAT networking only exposes
+the gateway on Windows localhost.
 
 Run the autonomous fetch (from WSL, in `sim-playground/`):
 
