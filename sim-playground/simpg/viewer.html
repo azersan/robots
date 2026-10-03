@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sim Gateway</title>
+<style>
+  :root { --bg:#14171a; --panel:#1d2125; --ink:#e6e8ea; --dim:#8b949e; --accent:#e8892b; --ok:#3fb950; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px; background:var(--panel); }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  button, select { background:#2b3137; color:var(--ink); border:1px solid #3a424a; border-radius:6px; padding:5px 10px; font:inherit; cursor:pointer; }
+  button.on { background:var(--accent); color:#111; border-color:var(--accent); }
+  main { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:12px; padding:12px 16px; }
+  .card { background:var(--panel); border-radius:8px; padding:8px; min-width:0; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); margin:0 0 6px; }
+  img, canvas { width:100%; display:block; border-radius:4px; background:#000; }
+  pre { margin:0; font:12px/1.45 ui-monospace, monospace; white-space:pre-wrap; }
+  .keys { color:var(--dim); font-size:12px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sim Gateway</h1>
+  <select id="scene"></select>
+  <button id="reset">Reset</button>
+  <button id="shuffle">Randomize</button>
+  <button id="run">Run</button>
+  <button id="latch">Latch</button>
+  <span class="keys">Drive: W/S forward/back, A/D turn, Space stop, L latch</span>
+</header>
+<main>
+  <div class="card"><h2>Chase</h2><img id="cam-chase" alt="chase camera"></div>
+  <div class="card"><h2>Front</h2><img id="cam-front" alt="front camera"></div>
+  <div class="card"><h2>Map</h2><canvas id="map" width="640" height="640"></canvas></div>
+  <div class="card"><h2>State</h2><pre id="state">connecting…</pre></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let info = null, st = null;
+const post = (path, body) => fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body||{})}).then(r => r.json());
+
+async function loadInfo() {
+  info = await fetch("/api/info").then(r => r.json());
+  $("scene").innerHTML = info.scenes.map(s => `<option ${s===info.scene?"selected":""}>${s}</option>`).join("");
+  $("run").classList.toggle("on", info.running);
+  $("run").textContent = info.running ? "Running" : "Paused";
+}
+
+function stream(name) {
+  const img = $("cam-" + name);
+  const next = () => setTimeout(() => { img.src = `/api/camera/${name}.jpg?t=${Date.now()}`; }, 60);
+  img.onload = next; img.onerror = () => setTimeout(next, 500);
+  next();
+}
+
+function drawMap() {
+  if (!info || !st) return;
+  const c = $("map"), g = c.getContext("2d");
+  const [x0, y0, x1, y1] = info.bounds, span = Math.max(x1 - x0, y1 - y0);
+  const s = c.width / span, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const P = (x, y) => [c.width / 2 + (x - cx) * s, c.height / 2 - (y - cy) * s];
+  g.fillStyle = "#24331d"; g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = "#e5534b"; g.lineWidth = 2; g.beginPath();
+  info.route.forEach(([x, y], i) => { const [u, v] = P(x, y); i ? g.lineTo(u, v) : g.moveTo(u, v); });
+  g.stroke();
+  st.bins.forEach(b => {
+    const [u, v] = P(b.x, b.y);
+    g.fillStyle = b.id === st.latched ? "#3fb950" : "#4c8dd6"; g.fillRect(u - 4, v - 4, 8, 8);
+  });
+  const car = st.car, [u, v] = P(car.x, car.y);
+  g.save(); g.translate(u, v); g.rotate(-car.yaw);
+  g.fillStyle = "#e8892b"; g.beginPath(); g.moveTo(9, 0); g.lineTo(-6, 5); g.lineTo(-6, -5); g.fill();
+  g.restore();
+}
+
+async function poll() {
+  try {
+    st = await fetch("/api/state").then(r => r.json());
+    const c = st.car, f = n => n.toFixed(2);
+    $("state").textContent =
+`t=${st.time.toFixed(1)}s  frame ${st.frame}  ${st.running ? "running @" + st.sim_fps + " fps" : "paused"}
+car  x=${f(c.x)} y=${f(c.y)} yaw=${(c.yaw * 57.3).toFixed(0)}°  v=${f(c.v)} w=${f(c.w)}
+cmd  v=${f(c.cmd.v)} w=${f(c.cmd.w)}   upright=${f(c.upright)}
+latched: ${st.latched === null ? "none" : "bin " + st.latched}
+` + st.bins.map(b => `bin${b.id} x=${f(b.x)} y=${f(b.y)} upright=${f(b.upright)}`).join("\n");
+    $("latch").classList.toggle("on", st.latched !== null);
+    drawMap();
+  } catch (e) { $("state").textContent = "gateway unreachable"; }
+  setTimeout(poll, 100);
+}
+
+const keys = new Set();
+addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
+  const k = e.key.toLowerCase();
+  if (k === "l") return toggleLatch();
+  if (k === " ") { keys.clear(); post("/api/drive", {v:0, w:0}); e.preventDefault(); return; }
+  keys.add(k);
+});
+addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
+setInterval(() => {
+  if (!keys.size) return;
+  const v = (keys.has("w") ? 1.2 : 0) - (keys.has("s") ? 0.8 : 0);
+  const w = (keys.has("a") ? 1.5 : 0) - (keys.has("d") ? 1.5 : 0);
+  post("/api/drive", {v, w});
+}, 100);
+
+async function toggleLatch() {
+  const r = await post("/api/latch", {engage: st && st.latched === null});
+  if (r.nearest && r.latched === null) $("latch").title = `nearest latch ${r.nearest.distance.toFixed(2)} m`;
+}
+
+$("latch").onclick = toggleLatch;
+$("reset").onclick = () => post("/api/reset", {scene: $("scene").value}).then(loadInfo);
+$("shuffle").onclick = () => post("/api/reset", {scene: $("scene").value, randomize: true, seed: Math.floor(Math.random() * 1e6)}).then(loadInfo);
+$("run").onclick = () => post("/api/run", {running: !(info && info.running)}).then(loadInfo);
+
+loadInfo().then(() => { stream("chase"); stream("front"); poll(); });
+</script>
+</body>
+</html>
