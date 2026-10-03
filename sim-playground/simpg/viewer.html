@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sim Gateway</title>
+<style>
+  :root { --bg:#14171a; --panel:#1d2125; --ink:#e6e8ea; --dim:#8b949e; --accent:#e8892b; --ok:#3fb950; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px; background:var(--panel); }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  button, select { background:#2b3137; color:var(--ink); border:1px solid #3a424a; border-radius:6px; padding:5px 10px; font:inherit; cursor:pointer; }
+  button.on { background:var(--accent); color:#111; border-color:var(--accent); }
+  main { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:12px; padding:12px 16px; }
+  .card { background:var(--panel); border-radius:8px; padding:8px; min-width:0; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); margin:0 0 6px; }
+  img, canvas { width:100%; display:block; border-radius:4px; background:#000; }
+  pre { margin:0; font:12px/1.45 ui-monospace, monospace; white-space:pre-wrap; }
+  .keys { color:var(--dim); font-size:12px; }
+
+  /* Touch / mouse drive pad */
+  .drive { display:flex; gap:16px; align-items:center; justify-content:center; padding:8px 0; }
+  .pad { position:relative; width:180px; height:180px; border-radius:50%; flex:none;
+         background:radial-gradient(circle, #2b3137 0 60%, #23282d 61%); border:1px solid #3a424a;
+         touch-action:none; user-select:none; -webkit-user-select:none; }
+  .pad::before, .pad::after { content:""; position:absolute; background:#3a424a; }
+  .pad::before { left:50%; top:12px; bottom:12px; width:1px; }
+  .pad::after { top:50%; left:12px; right:12px; height:1px; }
+  .knob { position:absolute; left:50%; top:50%; width:64px; height:64px; margin:-32px 0 0 -32px; border-radius:50%;
+          background:var(--accent); box-shadow:0 2px 8px #0008; z-index:1; pointer-events:none; }
+  .pad.active .knob { background:#ffa64d; }
+  .side { display:flex; flex-direction:column; gap:12px; }
+  .side button { width:110px; height:56px; font-size:16px; font-weight:600; touch-action:manipulation; }
+  #stop { background:#5a1d1d; border-color:#8a2b2b; }
+  #cmd { color:var(--dim); font:12px ui-monospace, monospace; text-align:center; }
+
+  main { grid-template-areas: "chase front" "ctl rear" "map state"; }
+  #c-chase { grid-area:chase; } #c-front { grid-area:front; } #c-rear { grid-area:rear; } #c-ctl { grid-area:ctl; }
+  #c-map { grid-area:map; } #c-state { grid-area:state; }
+  @media (max-width: 800px) {
+    header { padding:8px 12px; gap:8px; }
+    header h1, .keys { display:none; }
+    main { grid-template-columns: 1fr; grid-template-areas: "chase" "ctl" "front" "rear" "map" "state"; padding:8px; gap:8px; }
+    #c-ctl { position:sticky; bottom:0; z-index:2; box-shadow:0 -4px 12px #0009; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sim Gateway</h1>
+  <select id="scene"></select>
+  <button id="reset">Reset</button>
+  <button id="shuffle">Randomize</button>
+  <button id="run">Run</button>
+  <button id="latch">Latch</button>
+  <span class="keys">Drive: W/S forward/back, A/D turn, Space stop, L latch</span>
+</header>
+<main>
+  <div class="card" id="c-chase"><h2>Chase</h2><img id="cam-chase" alt="chase camera"></div>
+  <div class="card" id="c-front"><h2>Front</h2><img id="cam-front" alt="front camera"></div>
+  <div class="card" id="c-rear"><h2>Rear</h2><img id="cam-rear" alt="rear camera"></div>
+  <div class="card" id="c-ctl">
+    <div class="drive">
+      <div class="pad" id="pad"><div class="knob" id="knob"></div></div>
+      <div class="side">
+        <button id="stop">Stop</button>
+        <button id="latch2">Latch</button>
+      </div>
+    </div>
+    <div id="cmd">drag the pad: up = forward, sideways = turn</div>
+  </div>
+  <div class="card" id="c-map"><h2>Map</h2><canvas id="map" width="640" height="640"></canvas></div>
+  <div class="card" id="c-state"><h2>State</h2><pre id="state">connecting…</pre></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let info = null, st = null;
+const post = (path, body) => fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body||{})}).then(r => r.json());
+
+async function loadInfo() {
+  info = await fetch("/api/info").then(r => r.json());
+  $("scene").innerHTML = info.scenes.map(s => `<option ${s===info.scene?"selected":""}>${s}</option>`).join("");
+  $("run").classList.toggle("on", info.running);
+  $("run").textContent = info.running ? "Running" : "Paused";
+}
+
+function stream(name) {
+  const img = $("cam-" + name);
+  const next = () => setTimeout(() => { img.src = `/api/camera/${name}.jpg?t=${Date.now()}`; }, 60);
+  img.onload = next; img.onerror = () => setTimeout(next, 500);
+  next();
+}
+
+function drawMap() {
+  if (!info || !st) return;
+  const c = $("map"), g = c.getContext("2d");
+  const [x0, y0, x1, y1] = info.bounds, span = Math.max(x1 - x0, y1 - y0);
+  const s = c.width / span, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const P = (x, y) => [c.width / 2 + (x - cx) * s, c.height / 2 - (y - cy) * s];
+  g.fillStyle = "#24331d"; g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = "#e5534b"; g.lineWidth = 2; g.beginPath();
+  info.route.forEach(([x, y], i) => { const [u, v] = P(x, y); i ? g.lineTo(u, v) : g.moveTo(u, v); });
+  g.stroke();
+  st.bins.forEach(b => {
+    const [u, v] = P(b.x, b.y);
+    g.fillStyle = b.id === st.latched ? "#3fb950" : "#4c8dd6"; g.fillRect(u - 4, v - 4, 8, 8);
+  });
+  const car = st.car, [u, v] = P(car.x, car.y);
+  g.save(); g.translate(u, v); g.rotate(-car.yaw);
+  g.fillStyle = "#e8892b"; g.beginPath(); g.moveTo(9, 0); g.lineTo(-6, 5); g.lineTo(-6, -5); g.fill();
+  g.restore();
+}
+
+async function poll() {
+  try {
+    st = await fetch("/api/state").then(r => r.json());
+    const c = st.car, f = n => n.toFixed(2);
+    $("state").textContent =
+`t=${st.time.toFixed(1)}s  frame ${st.frame}  ${st.running ? "running @" + st.sim_fps + " fps" : "paused"}
+car  x=${f(c.x)} y=${f(c.y)} yaw=${(c.yaw * 57.3).toFixed(0)}°  v=${f(c.v)} w=${f(c.w)}
+cmd  v=${f(c.cmd.v)} w=${f(c.cmd.w)}   upright=${f(c.upright)}
+latched: ${st.latched === null ? "none" : "bin " + st.latched}
+` + st.bins.map(b => `bin${b.id} x=${f(b.x)} y=${f(b.y)} upright=${f(b.upright)}`).join("\n");
+    $("latch").classList.toggle("on", st.latched !== null);
+    $("latch2").classList.toggle("on", st.latched !== null);
+    $("latch2").textContent = st.latched === null ? "Latch" : "Release";
+    drawMap();
+  } catch (e) { $("state").textContent = "gateway unreachable"; }
+  setTimeout(poll, 100);
+}
+
+const keys = new Set();
+addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
+  const k = e.key.toLowerCase();
+  if (k === "l") return toggleLatch();
+  if (k === " ") { keys.clear(); post("/api/drive", {v:0, w:0}); e.preventDefault(); return; }
+  keys.add(k);
+});
+addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
+setInterval(() => {
+  if (!keys.size) return;
+  const v = (keys.has("w") ? 1.2 : 0) - (keys.has("s") ? 0.8 : 0);
+  const w = (keys.has("a") ? 1.5 : 0) - (keys.has("d") ? 1.5 : 0);
+  post("/api/drive", {v, w});
+}, 100);
+
+// Drive pad: pointer events cover touch and mouse. Up = forward, sideways = turn.
+const V_MAX = 1.2, W_MAX = 1.8;
+let padCmd = null;
+(function setupPad() {
+  const pad = $("pad"), knob = $("knob");
+  let id = null;
+  const move = e => {
+    const r = pad.getBoundingClientRect(), R = r.width / 2;
+    let dx = e.clientX - (r.left + R), dy = e.clientY - (r.top + R);
+    const d = Math.hypot(dx, dy), lim = R - 32;
+    if (d > lim) { dx *= lim / d; dy *= lim / d; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    const fx = dx / lim, fy = -dy / lim;
+    const dz = x => Math.abs(x) < 0.12 ? 0 : x;  // small deadzone so a tap doesn't creep
+    const v = dz(fy) * (fy > 0 ? V_MAX : 0.8);
+    // Steer the way the knob points, also when reversing.
+    const w = -dz(fx) * W_MAX * (fy < -0.12 ? -1 : 1);
+    padCmd = {v, w};
+    $("cmd").textContent = `v ${v.toFixed(2)} m/s   w ${w.toFixed(2)} rad/s`;
+  };
+  const end = () => {
+    id = null; padCmd = null; pad.classList.remove("active");
+    knob.style.transform = "";
+    $("cmd").textContent = "drag the pad: up = forward, sideways = turn";
+    post("/api/drive", {v:0, w:0});
+  };
+  pad.addEventListener("pointerdown", e => {
+    id = e.pointerId; pad.classList.add("active");
+    try { pad.setPointerCapture(id); } catch (_) {}
+    if (info && !info.running) post("/api/run", {running: true}).then(loadInfo);  // manual driving wants real time
+    move(e); e.preventDefault();
+  });
+  pad.addEventListener("pointermove", e => { if (e.pointerId === id) move(e); });
+  pad.addEventListener("pointerup", e => { if (e.pointerId === id) end(); });
+  pad.addEventListener("pointercancel", e => { if (e.pointerId === id) end(); });
+})();
+setInterval(() => { if (padCmd) post("/api/drive", padCmd); }, 100);
+
+async function toggleLatch() {
+  const r = await post("/api/latch", {engage: st && st.latched === null});
+  const msg = r.latched !== null && r.latched !== undefined ? `latched bin ${r.latched}`
+    : r.nearest ? `no latch in reach (nearest ${r.nearest.distance.toFixed(2)} m)` : "released";
+  $("cmd").textContent = msg;
+}
+
+$("latch").onclick = toggleLatch;
+$("latch2").onclick = toggleLatch;
+$("stop").onclick = () => { keys.clear(); padCmd = null; post("/api/drive", {v:0, w:0}); };
+$("reset").onclick = () => post("/api/reset", {scene: $("scene").value}).then(loadInfo);
+$("shuffle").onclick = () => post("/api/reset", {scene: $("scene").value, randomize: true, seed: Math.floor(Math.random() * 1e6)}).then(loadInfo);
+$("run").onclick = () => post("/api/run", {running: !(info && info.running)}).then(loadInfo);
+
+loadInfo().then(() => { stream("chase"); stream("front"); stream("rear"); poll(); });
+</script>
+</body>
+</html>

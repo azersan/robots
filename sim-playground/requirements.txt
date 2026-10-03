@@ -1,0 +1,6 @@
+newton[examples]>=1.6
+fastapi
+uvicorn[standard]
+pillow
+numpy
+httpx

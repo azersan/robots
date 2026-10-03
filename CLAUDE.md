@@ -31,6 +31,12 @@ Autonomous robot project converting a battle bot into a vision-based autonomous 
 The control loop is bidirectional: the Pi streams video and accepts drive
 commands on the same port. A watchdog stops the motors if commands stop.
 
+## Sim Playground
+
+`sim-playground/` is a GPU robot simulator (Newton, in WSL2 on the NZXT PC) behind an HTTP gateway on port 8642,
+with a browser viewer. It has the same kind of robot task: drive down the driveway, find the bins, latch on.
+See `sim-playground/README.md` for setup, and `sim-playground/AGENTS.md` for the API if you need to drive the sim.
+
 ## Key Files
 
 **Pi 5-side (`raspi-camera/pi-5/`, deploy to Pi home dir via SSH):**
