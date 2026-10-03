@@ -190,7 +190,8 @@ as known, standing in for GPS/odometry.
 The ground-truth log since the last reset, one row every 0.1 s:
 `{"columns": ["t", "x", "y", "yaw", "latched", "bin0_x", "bin0_y", "bin0_upright", ...], "rows": [...], "start": [x, y, yaw]}`.
 `latched` is −1 when nothing is hooked. Use it to score runs, including runs driven through
-the robot API.
+the robot API. `GET /api/episodes` returns `{"archived": [...], "current": {...}}`, where
+`archived` holds the last 20 episodes that were ended by a reset (from either API).
 
 ### `POST /api/config`
 `{"cmd_timeout": 0.5}` sets the watchdog in sim seconds (0 disables it; don't disable it

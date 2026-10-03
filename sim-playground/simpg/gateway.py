@@ -35,9 +35,17 @@ class Gateway:
         self.running = running
         self.speed = 1.0
         self.sim_fps = 0.0
+        self.archive = []  # episodes from before each reset, newest last (for scoring)
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+
+    def archive_episode(self):
+        """Keep the current episode before a reset wipes it (call with the lock held)."""
+        ep = self.sim.get_episode()
+        if ep["rows"]:
+            ep["archived_at"] = time.time()
+            self.archive = (self.archive + [ep])[-20:]
 
     def _loop(self):
         next_t = time.perf_counter()
@@ -113,6 +121,7 @@ def create_app(gw: Gateway) -> FastAPI:
     @app.post("/api/reset")
     def reset(req: ResetReq):
         with gw.lock:
+            gw.archive_episode()
             if req.scene and req.scene != gw.sim.scene_name:
                 if req.scene not in SCENES:
                     raise HTTPException(404, f"unknown scene {req.scene!r}; have {list(SCENES)}")
@@ -170,6 +179,12 @@ def create_app(gw: Gateway) -> FastAPI:
         """Ground-truth log since the last reset (robot pose, latch, bins every 0.1 s), for scoring."""
         with gw.lock:
             return gw.sim.get_episode()
+
+    @app.get("/api/episodes")
+    def episodes():
+        """The last 20 episodes that were ended by a reset, oldest first, plus the current one."""
+        with gw.lock:
+            return {"archived": gw.archive, "current": gw.sim.get_episode()}
 
     @app.get("/api/camera/{name}/depth.png")
     def depth(name: str):
@@ -260,6 +275,7 @@ def create_robot_app(gw: Gateway) -> FastAPI:
     @app.post("/robot/reset")
     def reset(req: RobotResetReq):
         with gw.lock:
+            gw.archive_episode()
             if req.scene and req.scene != gw.sim.scene_name:
                 if req.scene not in SCENES:
                     raise HTTPException(404, f"unknown scene {req.scene!r}; have {list(SCENES)}")
