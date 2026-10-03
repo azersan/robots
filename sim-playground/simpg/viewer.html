@@ -35,13 +35,13 @@
   #stop { background:#5a1d1d; border-color:#8a2b2b; }
   #cmd { color:var(--dim); font:12px ui-monospace, monospace; text-align:center; }
 
-  main { grid-template-areas: "chase front" "ctl map" "state map"; }
-  #c-chase { grid-area:chase; } #c-front { grid-area:front; } #c-ctl { grid-area:ctl; }
+  main { grid-template-areas: "chase front" "ctl rear" "map state"; }
+  #c-chase { grid-area:chase; } #c-front { grid-area:front; } #c-rear { grid-area:rear; } #c-ctl { grid-area:ctl; }
   #c-map { grid-area:map; } #c-state { grid-area:state; }
   @media (max-width: 800px) {
     header { padding:8px 12px; gap:8px; }
     header h1, .keys { display:none; }
-    main { grid-template-columns: 1fr; grid-template-areas: "chase" "ctl" "front" "map" "state"; padding:8px; gap:8px; }
+    main { grid-template-columns: 1fr; grid-template-areas: "chase" "ctl" "front" "rear" "map" "state"; padding:8px; gap:8px; }
     #c-ctl { position:sticky; bottom:0; z-index:2; box-shadow:0 -4px 12px #0009; }
   }
 </style>
@@ -59,6 +59,7 @@
 <main>
   <div class="card" id="c-chase"><h2>Chase</h2><img id="cam-chase" alt="chase camera"></div>
   <div class="card" id="c-front"><h2>Front</h2><img id="cam-front" alt="front camera"></div>
+  <div class="card" id="c-rear"><h2>Rear</h2><img id="cam-rear" alt="rear camera"></div>
   <div class="card" id="c-ctl">
     <div class="drive">
       <div class="pad" id="pad"><div class="knob" id="knob"></div></div>
@@ -197,7 +198,7 @@ $("reset").onclick = () => post("/api/reset", {scene: $("scene").value}).then(lo
 $("shuffle").onclick = () => post("/api/reset", {scene: $("scene").value, randomize: true, seed: Math.floor(Math.random() * 1e6)}).then(loadInfo);
 $("run").onclick = () => post("/api/run", {running: !(info && info.running)}).then(loadInfo);
 
-loadInfo().then(() => { stream("chase"); stream("front"); poll(); });
+loadInfo().then(() => { stream("chase"); stream("front"); stream("rear"); poll(); });
 </script>
 </body>
 </html>

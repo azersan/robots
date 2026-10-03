@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel
 
-from .sim import (CAMERAS, CHASSIS_Z0, FPS, FRONT_CAM_DIR, FRONT_CAM_POS, HOOK_LOCAL, MAX_WHEEL_SPEED, SCENES,
+from .sim import (CAMERAS, CHASSIS_Z0, FPS, FRONT_CAM_POS, HOOK_LOCAL, MAX_WHEEL_SPEED, ROBOT_CAMERAS, SCENES,
                   TRACK, Sim)
 
 HERE = os.path.dirname(__file__)
@@ -218,16 +218,24 @@ def create_robot_app(gw: Gateway) -> FastAPI:
         out["running"] = gw.running
         return out
 
+    def cam_spec(name):
+        w, h, fov = CAMERAS[name]
+        pos, d = ROBOT_CAMERAS[name]
+        return {"width": w, "height": h, "vertical_fov_deg": fov,
+                "facing": "forward" if d[0] > 0 else "backward",
+                "height_above_ground_m": round(CHASSIS_Z0 + pos[2], 3),
+                "pitch_down_deg": round(math.degrees(math.atan2(-d[2], abs(d[0]))), 1),
+                "from_robot_center_m": round(abs(pos[0]), 3)}
+
     @app.get("/robot/info")
     def info():
         with gw.lock:
-            w, h, fov = CAMERAS["front"]
+            front = cam_spec("front")
             return {
                 "scene": gw.sim.scene_name,
                 "directions": gw.sim.spec.directions,
-                "camera": {"width": w, "height": h, "vertical_fov_deg": fov,
-                           "height_above_ground_m": round(CHASSIS_Z0 + FRONT_CAM_POS[2], 3),
-                           "pitch_down_deg": round(math.degrees(math.atan2(-FRONT_CAM_DIR[2], FRONT_CAM_DIR[0])), 1),
+                "cameras": {"front": front, "rear": cam_spec("rear")},
+                "camera": {**front,  # the front camera, kept for older clients
                            "hook_ahead_of_camera_m": round(HOOK_LOCAL[0] - FRONT_CAM_POS[0], 3),
                            "hook_height_m": round(CHASSIS_Z0 + HOOK_LOCAL[2], 3)},
                 "drive": {"max_wheel_speed": MAX_WHEEL_SPEED, "track": TRACK, "cmd_timeout": gw.sim.cmd_timeout},
@@ -242,8 +250,17 @@ def create_robot_app(gw: Gateway) -> FastAPI:
 
     @app.get("/robot/camera.{fmt}")
     def camera(fmt: str, quality: int = 85):
+        """The front camera (same as /robot/camera/front.jpg)."""
         with gw.lock:
             rgb, _ = gw.sim.render("front")
+        return _encode(rgb, fmt, quality)
+
+    @app.get("/robot/camera/{name}.{fmt}")
+    def camera_named(name: str, fmt: str, quality: int = 85):
+        if name not in ROBOT_CAMERAS:
+            raise HTTPException(404, f"the robot has cameras {list(ROBOT_CAMERAS)}")
+        with gw.lock:
+            rgb, _ = gw.sim.render(name)
         return _encode(rgb, fmt, quality)
 
     @app.post("/robot/drive")

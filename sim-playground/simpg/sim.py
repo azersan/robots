@@ -74,7 +74,7 @@ GROUND_CFG = newton.ModelBuilder.ShapeConfig(mu=0.2, gap=0.01)
 
 SKY = 0xFFEBCDA8  # packed 0xAABBGGRR: a hazy afternoon blue
 SUN_DIR = (0.48, 0.55, -0.68)  # direction the light travels: sun in the south-west, ~43 deg up
-SUPERSAMPLE = {"front": 2, "chase": 2, "overhead": 1}  # renders at N x N and downsamples (no texture mipmaps)
+SUPERSAMPLE = {"front": 2, "rear": 2, "chase": 2, "overhead": 1}  # renders at N x N and downsamples (no texture mipmaps)
 
 # Fallback flat colors when the photo textures haven't been fetched (tools/fetch_assets.py).
 FALLBACK = {"grass": (0.33, 0.47, 0.22), "concrete": (0.70, 0.68, 0.64), "asphalt": (0.36, 0.36, 0.38),
@@ -83,10 +83,16 @@ FALLBACK = {"grass": (0.33, 0.47, 0.22), "concrete": (0.70, 0.68, 0.64), "asphal
 # Front camera mount in the chassis frame: position and look direction (pitched down ~7 deg).
 FRONT_CAM_POS = (CHASSIS_HALF[0] + 0.01, 0.0, CHASSIS_HALF[2] + 0.06)
 FRONT_CAM_DIR = (1.0, 0.0, -0.12)
+# Rear camera: the mirror image, on the tail, looking backward. It sees where you're going when
+# reversing with a bin on the nose.
+REAR_CAM_POS = (-(CHASSIS_HALF[0] + 0.01), 0.0, CHASSIS_HALF[2] + 0.06)
+REAR_CAM_DIR = (-1.0, 0.0, -0.12)
+ROBOT_CAMERAS = {"front": (FRONT_CAM_POS, FRONT_CAM_DIR), "rear": (REAR_CAM_POS, REAR_CAM_DIR)}
 
 CAMERAS = {
     # name: (width, height, vertical fov deg)
     "front": (320, 240, 70.0),
+    "rear": (320, 240, 70.0),
     "chase": (480, 320, 60.0),
     "overhead": (512, 512, 50.0),
 }
@@ -168,11 +174,12 @@ def add_car(builder, x, y, yaw):
     body_cfg = newton.ModelBuilder.ShapeConfig(density=600.0, mu=0.6, gap=0.01)
     hx, hy, hz = CHASSIS_HALF
     builder.add_shape_box(chassis, hx=hx, hy=hy, hz=hz, cfg=body_cfg, color=(0.85, 0.45, 0.10), label="car_body")
-    # Camera mast and tow hook, for looks.
-    builder.add_shape_box(
-        chassis, xform=wp.transform(p=wp.vec3(hx - 0.04, 0.0, hz + 0.04)), hx=0.03, hy=0.05, hz=0.04,
-        cfg=_visual(), color=(0.1, 0.1, 0.1), label="car_camera",
-    )
+    # Camera housings (front and rear) and tow hook, for looks.
+    for sx in (1.0, -1.0):
+        builder.add_shape_box(
+            chassis, xform=wp.transform(p=wp.vec3(sx * (hx - 0.04), 0.0, hz + 0.04)), hx=0.03, hy=0.05, hz=0.04,
+            cfg=_visual(), color=(0.1, 0.1, 0.1), label="car_camera",
+        )
     builder.add_shape_box(
         chassis, xform=wp.transform(p=wp.vec3(*HOOK_LOCAL)), hx=0.04, hy=0.06, hz=0.015,
         cfg=_visual(), color=(0.75, 0.75, 0.78), label="car_hook",
@@ -787,6 +794,7 @@ class Sim:
             # Body-frame mount of the front camera (OpenGL convention: looks down -Z, +Y up),
             # plus the chassis-center height, so clients can turn depth into world points.
             "front_mount": {"pos": FRONT_CAM_POS, "dir": FRONT_CAM_DIR, "chassis_z": CHASSIS_Z0},
+            "rear_mount": {"pos": REAR_CAM_POS, "dir": REAR_CAM_DIR, "chassis_z": CHASSIS_Z0},
             "route": self.spec.route,
             "bounds": self.spec.bounds,
             "fps": FPS,
@@ -801,9 +809,10 @@ class Sim:
     def _camera_pose(self, name, car):
         p = np.asarray(car[:3])
         q = car[3:7]
-        if name == "front":
-            eye = p + _rotate(q, FRONT_CAM_POS)
-            target = eye + _rotate(q, FRONT_CAM_DIR)
+        if name in ROBOT_CAMERAS:
+            pos, direction = ROBOT_CAMERAS[name]
+            eye = p + _rotate(q, pos)
+            target = eye + _rotate(q, direction)
         elif name == "chase":
             yaw = _yaw_of(q)
             eye = p + np.array([-3.0 * math.cos(yaw), -3.0 * math.sin(yaw), 1.8])

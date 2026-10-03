@@ -1,8 +1,8 @@
 # Robot API: camera-only control
 
 This is the interface for an agent that drives the robot **the way the real one would**:
-it sees through one forward-facing color camera, has a compass, can drive and latch, and
-gets plain-language directions. It does **not** know where it is, where the bins are, or
+it sees through two color cameras (one facing forward, one facing backward), has a
+compass, can drive and latch, and gets plain-language directions. It does **not** know where it is, where the bins are, or
 what the map looks like. It has to work all of that out from the picture.
 
 (There's also a full sim/admin API with ground truth on port 8642, documented in
@@ -25,6 +25,7 @@ live in the viewer on port 8642, possibly from a phone.
 | You get | Details |
 |---|---|
 | **Front camera** | Color only. 320×240. Mounted on the nose, 0.24 m off the ground, pitched down ~7°. |
+| **Rear camera** | Same specs, on the tail, looking backward. It's what you see where you're going when reversing. |
 | **Compass** | Heading in degrees: 0 = north, 90 = east (clockwise). About ±2° of noise. |
 | **Drive** | Forward speed `v` (m/s) and turn rate `w` (rad/s, positive = left). |
 | **Latch** | A hook on the nose. `engage` answers only yes or no, like a limit switch. |
@@ -40,7 +41,7 @@ bins' locations.
 |---|---|---|---|
 | GET | `/robot/info` | | Directions, camera specs, drive limits, `cmd_timeout`, `running` |
 | GET | `/robot/sensors` | | `{"time", "compass_deg", "latched", "cmd", "running"}` |
-| GET | `/robot/camera.jpg` (or `.png`) | | The current front-camera image. Optional `?quality=1-95` for JPEG. |
+| GET | `/robot/camera/front.jpg`, `/robot/camera/rear.jpg` (or `.png`) | | The current image from that camera. Optional `?quality=1-95` for JPEG. `/robot/camera.jpg` is the same as the front one. |
 | POST | `/robot/drive` | `{"v": 0.8, "w": 0.2}` | Sensors |
 | POST | `/robot/latch` | `{"engage": true}` or `{"engage": false}` | `{"latched": true/false}` |
 | POST | `/robot/step` | `{"frames": 3}` | Sensors, after advancing time (lockstep only) |
@@ -109,6 +110,10 @@ Pavement vs grass by color is the main way to keep on the road. Gray (low satura
 pavement; green means grass. Shadows darken both without changing which is which.
 
 ## Camera geometry (for judging distance)
+
+Both cameras have the same lens and mounting height; the rear one simply faces backward.
+The formulas below work for either. For the rear camera, "forward" means behind the robot
+and "left" means the robot's right, since that's the camera's own left.
 
 - **Field of view:** 70° vertical, ~86° horizontal, square pixels.
 - **Focal length:** `f = (240/2) / tan(35°) ≈ 171.4` px.
@@ -194,9 +199,13 @@ Bin sizes:
   with it.
 - An empty cart takes about 30 N to drag, well within what the robot can pull.
 - `{"engage": false}` releases it.
-- While towing, the bin blocks the center of the camera view. You can still see pavement
-  and grass on either side of it, looking back the way you came if you're reversing.
-  Turning in place with a bin attached swings the bin around in a ~1 m arc, so make sure
+- While latched, the bin fills the **front** camera. Use the **rear** camera to see where
+  you're going when you reverse with the bin in tow:
+  - [docs/robot_view_docked_front.jpg](docs/robot_view_docked_front.jpg): the front
+    camera when docked, all bin.
+  - [docs/robot_view_docked_rear.jpg](docs/robot_view_docked_rear.jpg): the rear camera
+    at the same moment, looking up the lane.
+- Turning in place with a bin attached swings the bin around in a ~1 m arc, so make sure
   there's room.
 
 ## How runs are judged
