@@ -76,6 +76,22 @@ def main(work: Path):
     check(len(xs) > 0 and max(abs(x) for x in xs) <= 2.0 + np.linalg.norm(fake.DRIFT_SHIFT) + 0.05,
           f"corridor 2 m keeps only faces centered near the path (max |x| = {max(abs(x) for x in xs):.2f} m)")
 
+    # Same walk without turning around at the end: drift from the overlap of the walk's end with the way out.
+    from scan2sim.bundle import load
+    from scan2sim.drift import loop_drift
+    noturn = load(fake.main(work, path_mode=True, turnaround=False)).keyframes
+    # The property that matters: the report is either right or says it can't tell, never confidently wrong.
+    for force in (False, True):
+        nt = loop_drift(noturn, force_overlap=force)
+        unreliable = nt.get("verdict", "").startswith("unreliable")
+        check(unreliable or abs(nt.get("drift_m", 0) - expected) < 0.06,
+              f"no-turnaround walk ({nt.get('method')}): {nt.get('drift_m')} ± {nt.get('uncertainty_m')} m, "
+              f"{'flagged unreliable' if unreliable else 'trusted'} (true {expected:.3f} m)")
+    for force in (False, True):
+        d = loop_drift(load(path_root).keyframes, force_overlap=force)
+        check(not d["verdict"].startswith("unreliable") and abs(d["drift_m"] - expected) < 0.06,
+              f"turnaround walk ({d['method']}): {d['drift_m']} ± {d['uncertainty_m']} m, trusted (true {expected:.3f} m)")
+
     print(f"\n{len(failures)} failure(s)")
     return 1 if failures else 0
 

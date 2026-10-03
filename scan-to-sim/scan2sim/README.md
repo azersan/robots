@@ -9,9 +9,12 @@ python -m scan2sim driveway.scan.zip --mass barrel=8 --check --newton
 python -m scan2sim path.scan.zip --corridor 3 --check     # long path: keep 3 m either side of where you walked
 ```
 
-Every run prints the **loop drift**, e.g. `Loop drift: 27 cm over 180 m walked (0.15%), yaw 1.5 deg: usable`.
-It is measured only if you finish where you started, facing the way you set off: the depth seen then is aligned
-(ICP) with the depth seen at the start, and the offset is how far the camera poses drifted over the walk.
+Every run prints the **loop drift**, e.g. `Loop drift: 27 ± 0 cm over 180 m walked (0.15%), yaw 1.5 deg: usable`.
+Depth seen at the end of the walk is aligned (point-to-plane ICP, normal-space sampled) with depth seen on the
+way out: matched views if you finish at the start facing the way you set off, otherwise wherever the end of the
+walk overlaps the outbound trip. The `±` comes from re-running the alignment from deliberately wrong starts; if
+they disagree (smooth ground only, nothing upright in common), the verdict says **unreliable** instead of
+guessing. Finish facing walls, posts or edges you saw at the start.
 Under 20 cm is good; 20–50 cm means some ghosting; over 50 cm, split the path into overlapping scans.
 Keyframe poses are never corrected after the fact, so high drift also smears colors from the far end.
 
@@ -33,7 +36,8 @@ Output goes to `<bundle>.scan/sim/`:
 3. Ground: per 5 cm cell, the lowest **up-facing** surface (ARKit winds faces consistently). Cells more than
    0.3 m above the local floor level (tabletops, seats) are rejected, then holes are filled from neighbors.
    ARKit classes are not used.
-4. Split: faces on the heightfield are ground, the rest is background.
+4. Split: faces on the heightfield are ground, the rest is background. A duplicate ground skin (flat faces
+   3-25 cm above measured ground, left where two passes disagreed because of drift) is removed.
 5. Objects: ground faces are removed from each tagged region, then only the connected piece at the tap point is kept
    (neighbors caught by the tag sphere go back to the background). Tags with < 100 faces are skipped (double taps).
 6. Color: each vertex takes the color of the closest keyframe that sees it, checked against that keyframe's LiDAR depth,

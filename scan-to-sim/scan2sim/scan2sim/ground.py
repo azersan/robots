@@ -144,3 +144,21 @@ def submesh(part: Part, mask: np.ndarray, name: str) -> Part:
     used, inverse = np.unique(faces.ravel(), return_inverse=True)
     colors = part.colors[used] if part.colors is not None else None
     return Part(name=name, vertices=part.vertices[used], faces=inverse.reshape(-1, 3), colors=colors, meta=dict(part.meta))
+
+
+def ghost_layer(part: Part, hf: Heightfield, low: float = 0.03, high: float = 0.25, min_flat: float = 0.9) -> np.ndarray:
+    """Face mask of a duplicate ground skin: flat faces (either winding) floating 3-25 cm above measured ground.
+
+    When two passes disagree about the ground height (drift), ARKit's fused mesh keeps both surfaces, and the
+    gap between them gets a downward-facing underside. The heightfield already holds the lowest surface; these
+    faces are the extra skin. Real raised surfaces (a curb top) are themselves the lowest surface in their
+    cells, so they sit on the heightfield and are not caught here.
+    """
+    v, f = part.vertices, part.faces
+    n = face_normals(v, f)
+    c = v[f].mean(axis=1)
+    dz = c[:, 2] - hf.sample(c[:, 0], c[:, 1])
+    ny, nx = hf.z.shape
+    ix = np.clip(np.round((c[:, 0] - hf.x0) / hf.cell).astype(int), 0, nx - 1)
+    iy = np.clip(np.round((c[:, 1] - hf.y0) / hf.cell).astype(int), 0, ny - 1)
+    return (np.abs(n[:, 2]) >= min_flat) & (dz > low) & (dz < high) & hf.measured[iy, ix]

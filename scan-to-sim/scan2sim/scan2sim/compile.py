@@ -11,7 +11,7 @@ from .bundle import Part, load, merge_parts
 from .clean import clean
 from .drift import loop_drift
 from .collision import body_origin, hull_volume, object_collision, write_obj
-from .ground import fit_heightfield, split_ground, submesh
+from .ground import fit_heightfield, ghost_layer, split_ground, submesh
 from .texture import colorize
 
 
@@ -55,7 +55,7 @@ def compile_bundle(path: Path, out: Path | None = None, cell: float = 0.05, mass
 
     drift = loop_drift(bundle.keyframes) if bundle.keyframes else {"revisited": False, "note": "no keyframes"}
     if drift.get("revisited") and "drift_m" in drift:
-        print(f"Loop drift: {drift['drift_m'] * 100:.0f} cm over {drift['path_length_m']:.0f} m walked "
+        print(f"Loop drift: {drift['drift_m'] * 100:.0f} ± {drift['uncertainty_m'] * 100:.0f} cm over {drift['path_length_m']:.0f} m walked "
               f"({drift['drift_percent_of_path']}%), yaw {drift['yaw_deg']} deg: {drift['verdict']}")
     else:
         print(f"Loop drift: not measured ({drift.get('note')})")
@@ -77,6 +77,10 @@ def compile_bundle(path: Path, out: Path | None = None, cell: float = 0.05, mass
     on_ground, rest = split_ground(scene, hf)
     ground_visual = submesh(scene, on_ground, "ground")
     background = submesh(scene, rest, "background")
+    ghost = ghost_layer(background, hf)
+    if ghost.any():
+        print(f"Removing a duplicate ground skin: {int(ghost.sum())} faces 3-25 cm above the ground (drift between passes)")
+        background = submesh(background, ~ghost, "background")
     # The tag sphere usually grabs some ground around the object's base; give that back to the ground.
     objects = [submesh(o, split_ground(o, hf)[1], o.name) for o in objects]
     # The tag sphere also catches pieces of neighboring things (a chair back next to a table). Keep only
@@ -131,6 +135,7 @@ def compile_bundle(path: Path, out: Path | None = None, cell: float = 0.05, mass
         "usd_ground_cell": usd_hf.cell,
         "ground_faces": int(len(ground_visual.faces)),
         "background_faces": int(len(background.faces)),
+        "ghost_faces_removed": int(ghost.sum()),
         "objects": [{"name": s["name"], "mass": s["mass"], "origin": [round(float(x), 4) for x in s["origin"]],
                      "faces": int(len(s["visual"].faces)), "collision": s["method"], "pieces": s["piece_info"]}
                     for s in obj_specs],

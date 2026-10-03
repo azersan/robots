@@ -90,8 +90,8 @@ def drift_transform() -> np.ndarray:
     return D
 
 
-def main(out: Path, path_mode: bool = False):
-    root = out / ("fake-path.scan" if path_mode else "fake-driveway.scan")
+def main(out: Path, path_mode: bool = False, turnaround: bool = True):
+    root = out / (("fake-path.scan" if turnaround else "fake-path-noturn.scan") if path_mode else "fake-driveway.scan")
     (root / "keyframes").mkdir(parents=True, exist_ok=True)
     (root / "objects").mkdir(exist_ok=True)
 
@@ -106,7 +106,8 @@ def main(out: Path, path_mode: bool = False):
     # (lo, hi) boxes for the renderer; the same boxes go in the mesh.
     boxes = [(np.array([-1.0, 7.4, ground_z(2, 7.5)]), np.array([5.0, 7.6, ground_z(2, 7.5) + 2.0])),   # wall
              (np.array([-1.7, -3.0, -0.2]), np.array([-1.5, 8.0, 0.2])),                               # curb
-             (np.array([-1.15, 1.35, -0.1]), np.array([-0.85, 1.65, 1.0]))]                            # post
+             (np.array([-1.15, 1.35, -0.1]), np.array([-0.85, 1.65, 1.0])),                            # post
+             (np.array([0.65, -3.15, -0.2]), np.array([0.95, -2.85, 1.0]))]                            # post behind start
     extra = []
     for lo, hi in boxes[1:]:
         b = trimesh.creation.box(bounds=[lo, hi]).subdivide().subdivide().subdivide()
@@ -170,7 +171,7 @@ def main(out: Path, path_mode: bool = False):
 
         # Boxes (wall, curb, post): slab test.
         hits = [(t_b, [40, 80, 220])]
-        for (lo, hi), rgb in zip(boxes, [[200, 60, 50], [230, 230, 220], [120, 70, 30]]):
+        for (lo, hi), rgb in zip(boxes, [[200, 60, 50], [230, 230, 220], [120, 70, 30], [120, 70, 30]]):
             with np.errstate(divide="ignore", invalid="ignore"):
                 t1, t2 = (lo - o) / d, (hi - o) / d
             t_near = np.nanmax(np.minimum(t1, t2), axis=1)
@@ -190,14 +191,17 @@ def main(out: Path, path_mode: bool = False):
     entries = []
     if path_mode:
         poses = []
+        e0 = np.array([0.0, -1.0, 1.3])
+        for look in [[0, -2.5, -1.3], [-2.0, -1.5, -1.3], [2.0, -1.5, -1.3]]:  # look around at the start first
+            poses.append(look_at(e0, e0 + look))
         for y in np.arange(-1.0, 7.01, 0.5):                       # out, looking ahead
             e = np.array([0.0, y, 1.3])
             poses.append(look_at(e, e + [0, 2.5, -1.3]))
         for y in np.arange(7.0, -1.01, -0.5):                      # back, looking ahead
             e = np.array([0.0, y, 1.3])
             poses.append(look_at(e, e + [0, -2.5, -1.3]))
-        n_out = len(poses) // 2
-        for y in [-1.0, -0.5, 0.0, 0.5]:                           # turn around at the start and look again
+        n_out = 3 + len(np.arange(-1.0, 7.01, 0.5))
+        for y in ([-1.0, -0.5, 0.0, 0.5] if turnaround else []):    # turn around at the start and look again
             e = np.array([0.0, y, 1.3])
             poses.append(look_at(e, e + [0, 2.5, -1.3]))
         D = drift_transform()
