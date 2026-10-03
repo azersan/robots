@@ -33,6 +33,9 @@ def main(argv=None) -> int:
     ap.add_argument("--min-confidence", type=int, default=1, choices=[0, 1, 2], help="lowest LiDAR depth confidence used")
     ap.add_argument("--corridor", type=float, metavar="M",
                     help="keep only geometry within M meters of the walked path (tagged objects are always kept)")
+    ap.add_argument("--ground", choices=["mesh", "depth"], default="mesh",
+                    help="ground heightfield from the ARKit mesh, or from keyframe depth aligned to the outbound pass "
+                         "(use depth when drift left phantom steps)")
     ap.add_argument("--max-faces", type=int, help="decimate the scene mesh to this many faces")
     ap.add_argument("--check", action="store_true", help="after compiling, drop a box in MuJoCo and verify it rests")
     ap.add_argument("--newton", action="store_true", help="with --check, also run the drop test in Newton (scene.usda)")
@@ -41,7 +44,7 @@ def main(argv=None) -> int:
     compile_bundle(args.bundle, out=args.out, cell=args.cell, masses=parse_masses(args.mass),
                    default_mass=args.default_mass, friction=args.friction, collision=args.collision,
                    texture=not args.no_texture, min_confidence=args.min_confidence, max_faces=args.max_faces,
-                   corridor=args.corridor)
+                   corridor=args.corridor, ground=args.ground)
     if args.check:
         from .bundle import open_bundle
         from .check import mujoco_check

@@ -162,3 +162,74 @@ def ghost_layer(part: Part, hf: Heightfield, low: float = 0.03, high: float = 0.
     ix = np.clip(np.round((c[:, 0] - hf.x0) / hf.cell).astype(int), 0, nx - 1)
     iy = np.clip(np.round((c[:, 1] - hf.y0) / hf.cell).astype(int), 0, ny - 1)
     return (np.abs(n[:, 2]) >= min_flat) & (dz > low) & (dz < high) & hf.measured[iy, ix]
+
+
+def _cell_low(points: np.ndarray, hf: Heightfield, pct: float = 0.2) -> np.ndarray:
+    """Per-cell low percentile of point heights on hf's grid (NaN where empty)."""
+    ny, nx = hf.z.shape
+    ix = np.round((points[:, 0] - hf.x0) / hf.cell).astype(np.int64)
+    iy = np.round((points[:, 1] - hf.y0) / hf.cell).astype(np.int64)
+    ok = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    flat = iy[ok] * nx + ix[ok]
+    zs = points[ok, 2]
+    order = np.lexsort((zs, flat))
+    flat, zs = flat[order], zs[order]
+    out = np.full(ny * nx, np.nan)
+    if len(flat) == 0:
+        return out.reshape(ny, nx)
+    starts = np.r_[0, np.nonzero(np.diff(flat))[0] + 1]
+    counts = np.diff(np.r_[starts, len(flat)])
+    out[flat[starts]] = zs[starts + (counts * pct).astype(np.int64)]
+    return out.reshape(ny, nx)
+
+
+def heightfield_from_depth(keyframes, mesh_hf: Heightfield, min_confidence: int = 1, max_rise: float = 0.3,
+                           align_sigma: float = 1.0) -> tuple[Heightfield, dict]:
+    """Ground from keyframe LiDAR depth, consistent with a single pass.
+
+    Drift makes the outbound and return passes disagree about height, and ARKit's fused mesh keeps both; taking
+    the lowest surface then jumps between passes and creates phantom steps. Here the outbound pass (keyframes up
+    to the farthest point from the start) defines the ground; return-pass depth fills cells the outbound pass
+    didn't see, after removing the local height offset measured where both passes overlap (smoothed over
+    `align_sigma` meters). Cells neither pass saw keep the mesh-based height.
+    """
+    from .drift import depth_points
+
+    pos = np.array([k.cam_to_world[:3, 3] for k in keyframes])
+    far = int(np.argmax(np.linalg.norm(pos[:, :2] - pos[0, :2], axis=1)))
+    passes = [keyframes[: far + 1], keyframes[far + 1 :]]
+    grids = []
+    for frames in passes:
+        pts = [depth_points(k, min_confidence=min_confidence) for k in frames]
+        grids.append(_cell_low(np.concatenate(pts), mesh_hf) if pts else np.full(mesh_hf.z.shape, np.nan))
+    out, ret = grids
+
+    # Drop raised surfaces (tabletops, car hoods) the same way the mesh fit does.
+    for g in (out, ret):
+        valid = np.isfinite(g)
+        if valid.any():
+            g[_raised(np.where(valid, g, np.inf), valid, mesh_hf.cell, max_rise)] = np.nan
+
+    both = np.isfinite(out) & np.isfinite(ret)
+    stats = {"outbound_cells": int(np.isfinite(out).sum()), "return_cells": int(np.isfinite(ret).sum()),
+             "overlap_cells": int(both.sum())}
+    if both.any():
+        sigma = align_sigma / mesh_hf.cell
+        d = np.where(both, ret - out, 0.0)
+        num = ndimage.gaussian_filter(d, sigma)
+        den = ndimage.gaussian_filter(both.astype(float), sigma)
+        have = den > 1e-3
+        offset = _fill(np.where(have, num / np.maximum(den, 1e-9), 0.0), have)
+        stats["return_offset_m"] = {"median": round(float(np.median(d[both])), 3),
+                                    "p95_abs": round(float(np.percentile(np.abs(d[both]), 95)), 3)}
+        ret = ret - offset
+    z = np.where(np.isfinite(out), out, ret)
+    measured = np.isfinite(z)
+    z = np.where(measured, z, mesh_hf.z)
+    # Remove isolated spikes and smooth lightly, as in the mesh fit.
+    med = ndimage.median_filter(z, size=5)
+    spikes = measured & (np.abs(z - med) > 0.1)
+    z = np.where(spikes, med, z)
+    z = ndimage.median_filter(z, size=3)
+    stats["depth_cells"] = int(measured.sum())
+    return Heightfield(mesh_hf.x0, mesh_hf.y0, mesh_hf.cell, z, mesh_hf.measured | measured), stats

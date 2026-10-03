@@ -7,7 +7,13 @@ pip install -r requirements.txt
 python -m scan2sim ~/Documents/Meshes/test_1-2026-10-03-1652.scan.zip --check
 python -m scan2sim driveway.scan.zip --mass barrel=8 --check --newton
 python -m scan2sim path.scan.zip --corridor 3 --check     # long path: keep 3 m either side of where you walked
+python -m scan2sim path.scan.zip --corridor 3 --ground depth  # out-and-back walk with drift: no phantom steps
 ```
+
+`--ground depth` rebuilds the ground from keyframe LiDAR depth: the outbound pass defines it, and return-pass depth
+fills the gaps after removing its height offset where both passes overlap (on the first driveway: median 7 cm,
+up to 15 cm). With the default mesh ground, drift between passes leaves phantom steps of 10-15 cm that stop a
+car; with depth ground the largest step along that driveway was 3.8 cm.
 
 Every run prints the **loop drift**, e.g. `Loop drift: 27 ± 0 cm over 180 m walked (0.15%), yaw 1.5 deg: usable`.
 Depth seen at the end of the walk is aligned (point-to-plane ICP, normal-space sampled) with depth seen on the

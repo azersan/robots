@@ -11,7 +11,7 @@ from .bundle import Part, load, merge_parts
 from .clean import clean
 from .drift import loop_drift
 from .collision import body_origin, hull_volume, object_collision, write_obj
-from .ground import fit_heightfield, ghost_layer, split_ground, submesh
+from .ground import fit_heightfield, ghost_layer, heightfield_from_depth, split_ground, submesh
 from .texture import colorize
 
 
@@ -45,7 +45,7 @@ def tapped_component(part: Part) -> np.ndarray:
 def compile_bundle(path: Path, out: Path | None = None, cell: float = 0.05, masses: dict[str, float] | None = None,
                    default_mass: float = 5.0, friction: float = 0.8, collision: str = "auto",
                    texture: bool = True, min_confidence: int = 1, max_faces: int | None = None,
-                   min_object_faces: int = 100, corridor: float | None = None) -> dict:
+                   min_object_faces: int = 100, corridor: float | None = None, ground: str = "mesh") -> dict:
     bundle = load(path)
     sim = Path(out) if out else bundle.root / "sim"
     (sim / "collision").mkdir(parents=True, exist_ok=True)
@@ -74,6 +74,14 @@ def compile_bundle(path: Path, out: Path | None = None, cell: float = 0.05, mass
 
     print(f"Fitting ground heightfield ({cell * 100:.0f} cm cells)")
     hf = fit_heightfield([scene], cell=cell)
+    ground_stats = {"source": "mesh"}
+    if ground == "depth" and bundle.keyframes:
+        print("Rebuilding ground from keyframe depth, aligned to the outbound pass")
+        hf, ground_stats = heightfield_from_depth(bundle.keyframes, hf, min_confidence=min_confidence)
+        ground_stats["source"] = "depth"
+        if "return_offset_m" in ground_stats:
+            print(f"  return pass vs outbound: median {ground_stats['return_offset_m']['median'] * 100:.0f} cm, "
+                  f"95% within {ground_stats['return_offset_m']['p95_abs'] * 100:.0f} cm (removed)")
     on_ground, rest = split_ground(scene, hf)
     ground_visual = submesh(scene, on_ground, "ground")
     background = submesh(scene, rest, "background")
@@ -132,6 +140,7 @@ def compile_bundle(path: Path, out: Path | None = None, cell: float = 0.05, mass
                         "measured_fraction": round(float(hf.measured.mean()), 4),
                         "z_range": [round(float(hf.z.min()), 4), round(float(hf.z.max()), 4)],
                         "file": "ground.hfield.bin"},
+        "ground": ground_stats,
         "usd_ground_cell": usd_hf.cell,
         "ground_faces": int(len(ground_visual.faces)),
         "background_faces": int(len(background.faces)),
