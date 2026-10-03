@@ -1,0 +1,10 @@
+numpy
+scipy
+trimesh
+usd-core
+mujoco>=3.2
+coacd
+pillow
+pillow-heif
+# optional, for --newton checks (best on the CUDA PC):
+# newton[importers]
