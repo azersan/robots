@@ -11,6 +11,7 @@ Open http://localhost:8642/ for the web viewer.
 
 import argparse
 import io
+import math
 import os
 import threading
 import time
@@ -21,7 +22,8 @@ from fastapi.responses import FileResponse, Response
 from PIL import Image
 from pydantic import BaseModel
 
-from .sim import CAMERAS, FPS, SCENES, Sim
+from .sim import (CAMERAS, CHASSIS_Z0, FPS, FRONT_CAM_DIR, FRONT_CAM_POS, HOOK_LOCAL, MAX_WHEEL_SPEED, SCENES,
+                  TRACK, Sim)
 
 HERE = os.path.dirname(__file__)
 
@@ -163,6 +165,12 @@ def create_app(gw: Gateway) -> FastAPI:
             rgb, _ = gw.sim.render(name)
         return _encode(rgb, fmt, quality)
 
+    @app.get("/api/episode")
+    def episode():
+        """Ground-truth log since the last reset (robot pose, latch, bins every 0.1 s), for scoring."""
+        with gw.lock:
+            return gw.sim.get_episode()
+
     @app.get("/api/camera/{name}/depth.png")
     def depth(name: str):
         """16-bit PNG, millimeters; 0 = no hit."""
@@ -172,6 +180,94 @@ def create_app(gw: Gateway) -> FastAPI:
             _, d = gw.sim.render(name)
         mm = np.where(d > 0, np.clip(d * 1000.0, 0, 65535), 0).astype(np.uint16)
         return _encode(mm, "png")
+
+    return app
+
+
+class RobotResetReq(BaseModel):
+    scene: str | None = None
+    seed: int | None = None
+    randomize: bool = True
+
+
+def create_robot_app(gw: Gateway) -> FastAPI:
+    """The robot's-eye API: only what the real robot could sense or do.
+
+    Color front camera, compass, drive, a yes/no latch, plain-language directions, and time
+    control for running trials. No positions, maps, depth, or other cameras.
+    """
+    app = FastAPI(title="Robot API", description="Camera-only robot interface. See ROBOT.md.")
+
+    def sensors():
+        out = gw.sim.robot_sensors()
+        out["running"] = gw.running
+        return out
+
+    @app.get("/robot/info")
+    def info():
+        with gw.lock:
+            w, h, fov = CAMERAS["front"]
+            return {
+                "scene": gw.sim.scene_name,
+                "directions": gw.sim.spec.directions,
+                "camera": {"width": w, "height": h, "vertical_fov_deg": fov,
+                           "height_above_ground_m": round(CHASSIS_Z0 + FRONT_CAM_POS[2], 3),
+                           "pitch_down_deg": round(math.degrees(math.atan2(-FRONT_CAM_DIR[2], FRONT_CAM_DIR[0])), 1),
+                           "hook_ahead_of_camera_m": round(HOOK_LOCAL[0] - FRONT_CAM_POS[0], 3),
+                           "hook_height_m": round(CHASSIS_Z0 + HOOK_LOCAL[2], 3)},
+                "drive": {"max_wheel_speed": MAX_WHEEL_SPEED, "track": TRACK, "cmd_timeout": gw.sim.cmd_timeout},
+                "fps": FPS,
+                "running": gw.running,
+            }
+
+    @app.get("/robot/sensors")
+    def get_sensors():
+        with gw.lock:
+            return sensors()
+
+    @app.get("/robot/camera.{fmt}")
+    def camera(fmt: str, quality: int = 85):
+        with gw.lock:
+            rgb, _ = gw.sim.render("front")
+        return _encode(rgb, fmt, quality)
+
+    @app.post("/robot/drive")
+    def drive(req: DriveReq):
+        with gw.lock:
+            gw.sim.set_drive(req.v, req.w)
+            return sensors()
+
+    @app.post("/robot/latch")
+    def latch(req: LatchReq):
+        with gw.lock:
+            return gw.sim.robot_latch(req.engage)
+
+    @app.post("/robot/step")
+    def step(req: StepReq):
+        if gw.running:
+            raise HTTPException(409, "sim is running in real time; POST /robot/run {\"running\": false} first")
+        with gw.lock:
+            gw.sim.step(max(0, min(req.frames, 6000)))
+            return sensors()
+
+    @app.post("/robot/run")
+    def run(req: RunReq):
+        gw.running = req.running
+        if req.speed:
+            gw.speed = max(0.05, min(req.speed, 20.0))
+        return {"running": gw.running, "speed": gw.speed}
+
+    @app.post("/robot/reset")
+    def reset(req: RobotResetReq):
+        with gw.lock:
+            if req.scene and req.scene != gw.sim.scene_name:
+                if req.scene not in SCENES:
+                    raise HTTPException(404, f"unknown scene {req.scene!r}; have {list(SCENES)}")
+                timeout = gw.sim.cmd_timeout
+                gw.sim = Sim(req.scene, req.seed or 0)
+                gw.sim.cmd_timeout = timeout
+            gw.sim.reset(seed=req.seed, randomize=req.randomize)
+            return sensors()
 
     return app
 
@@ -188,19 +284,32 @@ def _encode(arr, fmt, quality=80):
 
 
 def main():
+    import asyncio
+
     import uvicorn
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--scene", default="flat", choices=list(SCENES))
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=8642)
+    ap.add_argument("--port", type=int, default=8642, help="admin API + viewer")
+    ap.add_argument("--robot-port", type=int, default=8643, help="camera-only robot API")
     ap.add_argument("--paused", action="store_true", help="start in lockstep mode")
     args = ap.parse_args()
 
     gw = Gateway(args.scene, args.seed, running=not args.paused)
-    print(f"Sim Gateway: scene={args.scene} -> http://localhost:{args.port}/")
-    uvicorn.run(create_app(gw), host=args.host, port=args.port, log_level="warning")
+    print(f"Sim Gateway: scene={args.scene} -> viewer/admin http://localhost:{args.port}/, "
+          f"robot API http://localhost:{args.robot_port}/robot/info")
+    servers = [
+        uvicorn.Server(uvicorn.Config(create_app(gw), host=args.host, port=args.port, log_level="warning")),
+        uvicorn.Server(uvicorn.Config(create_robot_app(gw), host=args.host, port=args.robot_port,
+                                      log_level="warning")),
+    ]
+
+    async def serve():
+        await asyncio.gather(*(s.serve() for s in servers))
+
+    asyncio.run(serve())
 
 
 if __name__ == "__main__":

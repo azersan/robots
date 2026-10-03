@@ -1,7 +1,12 @@
 # Driving the sim: guide for agents
 
-Read this if you are a program or AI agent that wants to control the simulated robot. You
-don't need to read the sim's source. Everything goes through one HTTP API.
+> **Playing the robot (camera only, no positions)? Use [ROBOT.md](ROBOT.md) and port 8643
+> instead.** This file documents the full sim/admin API on port 8642. That API includes
+> ground truth (exact poses of the robot and bins), so it's meant for tools, scoring and
+> the viewer, or for tasks where using ground truth is explicitly allowed.
+
+Read this if you are a program or AI agent that wants full access to the simulated
+robot. You don't need to read the sim's source. Everything goes through HTTP.
 
 ## What you're controlling
 
@@ -180,6 +185,12 @@ as known, standing in for GPS/odometry.
 
 ### `POST /api/run`
 `{"running": true, "speed": 2.0}` or `{"running": false}`. Reply: `{"running": ..., "speed": ...}`.
+
+### `GET /api/episode`
+The ground-truth log since the last reset, one row every 0.1 s:
+`{"columns": ["t", "x", "y", "yaw", "latched", "bin0_x", "bin0_y", "bin0_upright", ...], "rows": [...], "start": [x, y, yaw]}`.
+`latched` is −1 when nothing is hooked. Use it to score runs, including runs driven through
+the robot API.
 
 ### `POST /api/config`
 `{"cmd_timeout": 0.5}` sets the watchdog in sim seconds (0 disables it; don't disable it

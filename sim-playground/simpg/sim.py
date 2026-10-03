@@ -65,6 +65,8 @@ HITCH_C = 150.0
 
 FPS = 60
 SUBSTEPS = 10
+RECORD_EVERY = 6  # episode log: one ground-truth row every 0.1 s
+COMPASS_NOISE_DEG = 2.0
 
 # Contact friction is the max of the two surfaces, so the ground stays low and each
 # object's own mu (tires 1.0, bin 0.25, ...) decides.
@@ -155,6 +157,7 @@ class SceneSpec:
     bins: list  # [(x, y, yaw, color)]
     route: list = field(default_factory=list)  # [(x, y)] reference path, if any
     bounds: tuple = (-10.0, -10.0, 10.0, 10.0)  # xmin, ymin, xmax, ymax for the overhead view
+    directions: str = ""  # plain-language directions for a robot that only has its camera
 
 
 def add_car(builder, x, y, yaw):
@@ -419,6 +422,9 @@ def build_flat(builder, rng, look):
         start=(0.0, 0.0, 0.0),
         bins=[(8.0, 0.65, math.pi, "recycling"), (8.0, -0.6, math.pi, "trash")],
         route=[(0.0, 0.0), (6.5, 0.6)],
+        directions=("You start at one end of a straight concrete pad, facing along it. The two bins, a big blue "
+                    "recycling cart and a smaller gray trash cart, stand side by side at the far end of the pad, "
+                    "about 8 m ahead, with their backs (handles and wheels) facing you."),
         bounds=bounds,
     )
 
@@ -457,7 +463,8 @@ def build_anna_pl(builder, rng, look):
 
     add_treeline(builder, look, bounds, rng)
     bins = [(bx, by, math.radians(site.BIN_YAW_DEG), kind) for (bx, by), kind in zip(site.bins_m(), site.BIN_KINDS)]
-    return SceneSpec(name="anna_pl", start=site.start_pose(), bins=bins, route=route, bounds=bounds)
+    return SceneSpec(name="anna_pl", start=site.start_pose(), bins=bins, route=route, bounds=bounds,
+                     directions=site.DIRECTIONS)
 
 
 SCENES = {"flat": build_flat, "anna_pl": build_anna_pl}
@@ -602,6 +609,56 @@ class Sim:
                 self._simulate()
             self.time += 1.0 / FPS
             self.frame += 1
+            if self.frame % RECORD_EVERY == 0:
+                self._record()
+
+    # -- episode recording (ground truth, for scoring; never exposed to the robot API) --
+
+    def _record(self):
+        bq = self.state_0.body_q.numpy()
+        car = bq[self.car]
+        row = [round(self.time, 3), float(car[0]), float(car[1]), _yaw_of(car[3:7]),
+               -1 if self.latched_bin is None else self.latched_bin]
+        for b in self.bins:
+            t = bq[b["body"]]
+            row += [float(t[0]), float(t[1]), float(_rotate(t[3:7], (0.0, 0.0, 1.0))[2])]
+        self.episode.append(row)
+
+    def get_episode(self):
+        cols = ["t", "x", "y", "yaw", "latched"]
+        for i in range(len(self.bins)):
+            cols += [f"bin{i}_x", f"bin{i}_y", f"bin{i}_upright"]
+        return {"columns": cols, "rows": self.episode, "start": list(self.start_pose),
+                "seed": self.seed, "scene": self.scene_name, "every_s": RECORD_EVERY / FPS}
+
+    def place_car(self, x, y, yaw):
+        """Teleport the car (at rest) for tools and tests. Not exposed over HTTP."""
+        q = self.state_0.joint_q.numpy()
+        q0 = self.car_q0
+        q[q0:q0 + 3] = (x, y, CHASSIS_Z0)
+        q[q0 + 3:q0 + 7] = (0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))
+        qd = np.zeros(self.model.joint_dof_count, dtype=np.float32)
+        for st in (self.state_0, self.state_1):
+            st.joint_q.assign(q)
+            st.joint_qd.assign(qd)
+            newton.eval_fk(self.model, st.joint_q, st.joint_qd, st)
+
+    # -- robot-mode sensors (only what the real robot could know) --
+
+    def compass_deg(self):
+        """Heading in compass degrees (0 = north, 90 = east), with a little magnetometer noise."""
+        yaw = _yaw_of(self.state_0.body_q.numpy()[self.car][3:7])
+        heading = (90.0 - math.degrees(yaw)) % 360.0
+        return round((heading + self._compass_rng.gauss(0.0, COMPASS_NOISE_DEG)) % 360.0, 1)
+
+    def robot_sensors(self):
+        return {"time": round(self.time, 3), "compass_deg": self.compass_deg(),
+                "latched": self.latched_bin is not None, "cmd": {"v": self.cmd[0], "w": self.cmd[1]}}
+
+    def robot_latch(self, engage=True):
+        """Latch with only a yes/no answer, like a limit switch on the hook."""
+        r = self.latch(engage)
+        return {"latched": r["latched"] is not None}
 
     def reset(self, seed=None, randomize=True):
         if seed is not None:
@@ -620,6 +677,9 @@ class Sim:
             sy += rng.uniform(-0.5, 0.5)
             syaw += math.radians(rng.uniform(-15, 15))
         place(self.car_q0, sx, sy, CHASSIS_Z0, syaw)
+        self.start_pose = (sx, sy, syaw)
+        self.episode = []
+        self._compass_rng = random.Random(self.seed * 7919 + 17)
         for b, (bx, by, byaw, kind) in zip(self.bins, self.spec.bins):
             if randomize:
                 # Bins sit side by side, so keep the jitter small enough that they never overlap.

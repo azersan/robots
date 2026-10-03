@@ -40,6 +40,17 @@ BINS_PX = [(778, 1128), (752, 1134)]
 BIN_KINDS = ["recycling", "trash"]  # big blue 96 gal, smaller gray 64 gal
 BIN_YAW_DEG = 90.0  # wheels/handle side facing north (toward the house), lid side to the street
 
+# What a robot with only a camera is told (robot API /robot/info).
+DIRECTIONS = (
+    "You start on the concrete driveway in front of the garage, facing down the driveway. "
+    "Follow the driveway (it curves gently) to where it meets the lane, Anna Pl, and turn right onto the lane. "
+    "Follow the lane (asphalt) all the way to the street at the bottom, about 90 m from the garage in total. "
+    "The two bins are at the end on your right, by the street: a big blue recycling cart and a smaller gray "
+    "trash cart, side by side, with their backs (handles and wheels) facing up the lane toward you. "
+    "To come home, retrace the route: back up the lane, turn left onto the driveway, and follow it to the garage. "
+    "Stay on the pavement; the lawns and the wooded strips are grass."
+)
+
 # Paved surfaces as polylines with a width (m) and surface. Visual only; physics is a flat plane for now.
 PAVEMENT = [
     # House #11 driveway, garage apron down to the lane.

@@ -7,8 +7,13 @@ they'd drive real hardware. Physics and cameras come from [Newton](https://githu
 Current scenario: a small tug drives from the garage at #11 down Anna Pl (~91 m), finds the
 trash bins at the street, docks on one, and latches on.
 
-**Controlling the sim from another program or agent? Read [AGENTS.md](AGENTS.md).** It covers
-the full API, units and frames, timing modes, camera math, and docking geometry.
+**Controlling the sim from another program or agent?** There are two APIs on the same sim:
+
+- **[ROBOT.md](ROBOT.md), port 8643: the robot's-eye API.** Color front camera, compass, drive,
+  a yes/no latch, and plain-language directions. No positions, maps or depth. Use it for
+  autonomy tasks.
+- **[AGENTS.md](AGENTS.md), port 8642: the full sim/admin API.** Ground truth, all cameras,
+  depth, and the episode log for scoring. The viewer uses it too.
 
 ```
  controllers/ (any HTTP client: scripts, policies, Claude later)
