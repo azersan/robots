@@ -83,6 +83,9 @@ When you're done, stop the robot and switch back to real time
 
 - The robot is a differential-drive tug: two drive wheels at the back, a free ball caster
   at the front, about 0.6 m long and 0.4 m wide. It can **turn in place** (`v = 0`).
+- It pivots about the middle of the drive axle, 0.10 m behind its center. That puts the
+  front camera 0.41 m ahead of the pivot and the rear camera 0.21 m behind it. Both are
+  given as `from_turn_center_m` in `/robot/info`.
 - Wheel speed is capped at 2 m/s. If a command would exceed it, both wheels are scaled
   down together, so the curve keeps its shape. Sensible speeds are 0.8–1.2 m/s cruising,
   ≤ 0.25 m/s near a bin, and ≤ 0.5 m/s while towing.
@@ -108,6 +111,10 @@ When you're done, stop the robot and switch back to real time
 
 Pavement vs grass by color is the main way to keep on the road. Gray (low saturation) means
 pavement; green means grass. Shadows darken both without changing which is which.
+
+Beige concrete can come close to a naive "green" test. Check that green beats red, not
+just blue. In shadow, concrete and asphalt look alike, and the concrete-to-asphalt seam
+where the driveway meets the lane shows up as a darker band rather than a sharp edge.
 
 ## Camera geometry (for judging distance)
 
@@ -159,7 +166,11 @@ The procedure:
 
 1. **Come at the bin from its back:** the side with the handle across the top and the two
    black wheels at the bottom. You can't latch from the front (lid side) or the sides.
-2. **Stop about 1–1.5 m behind the bin and line up.** Turn so the bin is centered in the
+2. **Stop about 1–1.5 m behind the bin and line up.** On `anna_pl` this is the tightest
+   spot on the route. The carts stand on the street with their backs to the lane mouth,
+   and there are only **about 2.7 m (blue) and 3.0 m (gray) of pavement** between a cart's
+   back and the lawn. Line up close to the cart, and measure the lawn edge before
+   maneuvering. Turn so the bin is centered in the
    image and its back face looks square: the left and right edges, and the two wheels,
    look symmetric. The yellow bar should sit horizontally in the middle, between the
    wheels.
@@ -178,7 +189,7 @@ centered and square):
 
 | Distance | Image | What you see |
 |---|---|---|
-| 3 m | [docs/robot_view_300cm.jpg](docs/robot_view_300cm.jpg) | Both bins, small, at the end of the pavement. |
+| 3 m | [docs/robot_view_300cm.jpg](docs/robot_view_300cm.jpg) | Both bins, small, at the end of the pavement. This view is taken from the lawn behind the strip (on `anna_pl` you can't stand 3 m back on pavement), so expect more pavement in the foreground from the lane. |
 | 1 m | [docs/robot_view_100cm.jpg](docs/robot_view_100cm.jpg) | Bin fills the middle; the wheels and the yellow bar are visible at the bottom of it. |
 | 0.5 m | [docs/robot_view_050cm.jpg](docs/robot_view_050cm.jpg) | Bin fills most of the frame, with the wheels on either side; the bar is just below the middle of the image. |
 | 0.3 m | [docs/robot_view_030cm.jpg](docs/robot_view_030cm.jpg) | The bar and its brackets are large in the lower middle. |
@@ -206,7 +217,9 @@ Bin sizes:
   - [docs/robot_view_docked_rear.jpg](docs/robot_view_docked_rear.jpg): the rear camera
     at the same moment, looking up the lane.
 - Turning in place with a bin attached swings the bin around in a ~1 m arc, so make sure
-  there's room.
+  there's room. The two carts stand side by side about 2 m apart (center to center), so
+  pivoting right next to them can swing the towed cart into the other one. Back straight
+  out first, then turn.
 
 ## How runs are judged
 

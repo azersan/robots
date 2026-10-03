@@ -130,3 +130,13 @@ curl -s -X POST localhost:8642/api/drive -H 'content-type: application/json' -d 
 | anna_pl (6 + 3 seeds) | truth | 9/9 | ~89 s |
 | flat, modeled carts (6 seeds) | camera | 5/6 | ~16 s |
 | anna_pl, modeled carts (5 seeds) | camera | 5/5 | ~86 s |
+
+Fetch the bin **and tow it home**:
+
+| Controller | Sensing | Home | Time on grass | Sim time |
+|---|---|---|---|---|
+| `tow_home.py` (seeds 1–3) | depth camera + true pose | 3/3, bin 1.06 m from start | not measured | ~186 s |
+| `robot_tow_home.py` (seeds 1–3) | **robot API only**: two color cameras, compass, directions | 3/3, bin 1.7–2.1 m from start | **0 s** (robot and bin) | ~350 s |
+
+Both controllers were written by sub-agents. `robot_tow_home.py` was written from
+[ROBOT.md](ROBOT.md) alone. Score runs with `tools/score_episodes.py`.

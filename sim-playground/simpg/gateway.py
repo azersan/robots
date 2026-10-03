@@ -23,7 +23,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from .sim import (CAMERAS, CHASSIS_Z0, FPS, FRONT_CAM_POS, HOOK_LOCAL, MAX_WHEEL_SPEED, ROBOT_CAMERAS, SCENES,
-                  TRACK, Sim)
+                  TRACK, WHEEL_MOUNT, Sim)
 
 HERE = os.path.dirname(__file__)
 
@@ -225,7 +225,9 @@ def create_robot_app(gw: Gateway) -> FastAPI:
                 "facing": "forward" if d[0] > 0 else "backward",
                 "height_above_ground_m": round(CHASSIS_Z0 + pos[2], 3),
                 "pitch_down_deg": round(math.degrees(math.atan2(-d[2], abs(d[0]))), 1),
-                "from_robot_center_m": round(abs(pos[0]), 3)}
+                "from_robot_center_m": round(abs(pos[0]), 3),
+                # The robot pivots about the middle of its drive axle, not its center.
+                "from_turn_center_m": round(abs(pos[0] - WHEEL_MOUNT[0]), 3)}
 
     @app.get("/robot/info")
     def info():
