@@ -10,8 +10,16 @@ Pipeline
                 face is, drive into the strip of street between the lawn and the carts and
                 stop ~1.3 m behind the cart, facing it.
   3. LATCH    : visual servo on the yellow latch bar, creep in, try the latch every cm.
-  4. TOW HOME : with the cart blocking the camera, retrace the logged outbound path in
-                reverse (pure pursuit on the dead-reckoned pose) back to the start.
+  4. TOW HOME : with the cart blocking the front camera, retrace the logged outbound path in
+                reverse (pure pursuit on the dead-reckoned pose, rear-camera pavement follower,
+                smoothed steering). Progress is measured by visual odometry, not by commands.
+
+Visual odometry (GroundVO): every control tick the rear camera's view of the ground 0.3-1.0 m
+behind the tail is projected to a bird's-eye patch and phase-correlated against a keyframe
+(searching rotation and camera pitch, which the scanned ground's bumps throw around). It runs the
+whole trip, so the outbound route length and the towed distance are measured the same way; the
+tow ends when the towed VO distance reaches the outbound VO length. Rear-camera reference views
+stored every 0.5 m over the first 16 m of the way out (and at the start) recognise home.
 
 usage: python robot_tow_home.py [--seed N] [--no-reset] [--debug] [--realtime-after]
 """
@@ -33,7 +41,8 @@ CAM_AHEAD = 0.45     # camera ahead of the wheel axle (rotation centre), measure
 HOOK_AHEAD = 0.03    # hook ahead of camera
 DT_FRAMES = 3        # 0.05 s per control tick
 DT = DT_FRAMES / 60.0
-DBG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tmp", "robot", "run")
+HOME_REF_LEN = 16.0  # rear reference views are stored for the first 16 m of the outbound path
+DBG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tmp", "robot2", "run")
 
 
 def wrap180(a):
@@ -193,6 +202,220 @@ def find_bar(im, u_hint=None):
                 width_m=float(abs(ll - lr)), npx=int(len(us)))
 
 
+# ----------------------------------------------------------------------------- visual odometry
+def gray_of(im):
+    return im[..., 0] * 0.3 + im[..., 1] * 0.59 + im[..., 2] * 0.11
+
+
+def pix_of_ground(fwd, left, pitch=PITCH, h=CAM_H):
+    """inverse of ground_point: pixel (u, v) of a ground point (fwd, left) from the camera"""
+    sp, cp = math.sin(pitch), math.cos(pitch)
+    yc = fwd * sp - h * cp
+    zc = fwd * cp + h * sp
+    return W / 2 - F * left / zc - 0.5, H / 2 - F * yc / zc - 0.5
+
+
+def _highpass(p, k=5):
+    c = np.cumsum(np.cumsum(np.pad(p, k, mode="edge"), 0), 1)
+    c = np.pad(c, ((1, 0), (1, 0)))
+    n = 2 * k + 1
+    bl = (c[n:, n:] - c[:-n, n:] - c[n:, :-n] + c[:-n, :-n]) / (n * n)
+    return p - bl[: p.shape[0], : p.shape[1]]
+
+
+class GroundVO:
+    """Visual odometry from the REAR camera looking at the ground behind the robot.
+
+    Each frame, a bird's-eye patch of the ground 0.30-1.02 m behind the camera, +-0.6 m wide, is
+    resampled at 1.5 cm/px in the robot frame (origin = turn centre) using the camera geometry.
+    The patch is matched against a keyframe patch by phase correlation, searching over the
+    relative rotation and the relative camera pitch (on the scanned ground the bumps pitch the
+    robot by several degrees, which badly distorts the projection). The keyframe is renewed every
+    ~0.15 m / 8 deg; each keyframe is assumed at the nominal pitch, so a pitch-induced error
+    of one keyframe does not carry over into the next one.
+    World heading comes from the compass (smoothed with the VO rotation), so only the
+    translation is taken from the image."""
+
+    CAM_OFF = 0.21                      # rear camera behind the turn centre
+
+    def __init__(self, x_rng=(0.30, 1.02), y_half=0.6, res=0.015):
+        nx = int(round((x_rng[1] - x_rng[0]) / res)); ny = int(round(2 * y_half / res))
+        nx += nx % 2; ny += ny % 2
+        self.res = res
+        cx = x_rng[0] + (np.arange(nx) + 0.5) * res
+        cy = -y_half + (np.arange(ny) + 0.5) * res
+        CX, CY = np.meshgrid(cx, cy, indexing="ij")
+        self.gx = -(self.CAM_OFF + CX)      # robot frame: x forward, y left
+        self.gy = -CY
+        self.win = np.hanning(nx)[:, None] * np.hanning(ny)[None, :]
+        ii = np.fft.fftfreq(nx, 1.0 / nx)[:, None]; jj = np.fft.fftfreq(ny, 1.0 / ny)[None, :]
+        # index shift of the correlation peak == robot displacement (both patch axes run
+        # opposite to the robot axes for the rear camera)
+        self.si = np.broadcast_to(ii, (nx, ny)) * res
+        self.sj = np.broadcast_to(jj, (nx, ny)) * res
+        self.key = None
+        self.key_pitch = 0.0
+        self.last_dp = 0.0
+        self.key_xy = np.zeros(2)       # world position of the keyframe
+        self.key_h = 0.0                # world heading (compass deg) of the keyframe
+        self.rel = np.zeros(3)          # current pose relative to keyframe (dx, dy, dth) key frame
+        self.x = 0.0; self.y = 0.0; self.h = None
+        self.vel = np.zeros(2)          # recent measured velocity, robot frame (m/s)
+        self.n_ok = self.n_bad = 0
+        self.q = 0.0
+        self.pitch0 = 0.0               # camera pitch offset vs the nominal 6.8 deg (prior)
+
+    def _sample(self, gray, gx, gy, pitch):
+        u, v = pix_of_ground(-gx - self.CAM_OFF, -gy, pitch)
+        u = np.clip(u, 0, W - 1.001); v = np.clip(v, 0, H - 1.001)
+        u0 = u.astype(int); v0 = v.astype(int); du = u - u0; dv = v - v0
+        a = gray[v0, u0]; b = gray[v0, u0 + 1]; c = gray[v0 + 1, u0]; d = gray[v0 + 1, u0 + 1]
+        return (a * (1 - du) + b * du) * (1 - dv) + (c * (1 - du) + d * du) * dv
+
+    def _fft(self, gray, rot, pitch):
+        cr, sr = math.cos(rot), math.sin(rot)
+        gx = cr * self.gx - sr * self.gy
+        gy = sr * self.gx + cr * self.gy
+        return np.fft.fft2(_highpass(self._sample(gray, gx, gy, pitch)) * self.win)
+
+    def _corr(self, A, Bf, pred, rad):
+        R = Bf * np.conj(A)
+        R /= np.abs(R) + 1e-3
+        r = np.real(np.fft.ifft2(R))
+        r = np.where((self.si - pred[0]) ** 2 + (self.sj - pred[1]) ** 2 > rad ** 2, -1.0, r)
+        i, j = np.unravel_index(np.argmax(r), r.shape)
+        pk = r[i, j]
+        nx, ny = r.shape
+
+        def sub(m_, c, p_):
+            d = m_ - 2 * c + p_
+            return 0.0 if abs(d) < 1e-9 else float(np.clip(0.5 * (m_ - p_) / d, -0.5, 0.5))
+        dx = self.si[i, j] + sub(r[(i - 1) % nx, j], pk, r[(i + 1) % nx, j]) * self.res
+        dy = self.sj[i, j] + sub(r[i, (j - 1) % ny], pk, r[i, (j + 1) % ny]) * self.res
+        return dx, dy, float(pk), r, (i, j)
+
+    def _match(self, gray_b, pred, rad=0.08):
+        dth0 = pred[2]
+        c, s_ = math.cos(-dth0), math.sin(-dth0)
+        sp = (c * pred[0] - s_ * pred[1], s_ * pred[0] + c * pred[1])   # predicted s' (B frame)
+        cache = {}
+
+        def ev(dth, dp):
+            k = (round(dth, 5), round(dp, 5))
+            if k not in cache:
+                A = self._fft(self.key, dth, PITCH + self.key_pitch)
+                Bf = self._fft(gray_b, 0.0, PITCH + self.key_pitch + dp)
+                cache[k] = self._corr(A, Bf, sp, rad)
+            return cache[k]
+
+        dth, dp = dth0, self.last_dp
+        cur = ev(dth, dp)
+        for st_p, st_r in zip((4, 2, 1, 0.5), (2, 1, 0.5, 0.25)):
+            st_p, st_r = math.radians(st_p), math.radians(st_r)
+            for _ in range(3):
+                moved = False
+                for cand in ((dth, dp + st_p), (dth, dp - st_p), (dth + st_r, dp), (dth - st_r, dp)):
+                    if abs(cand[0] - dth0) > math.radians(6) or abs(cand[1]) > math.radians(14):
+                        continue
+                    r = ev(*cand)
+                    if r[2] > cur[2]:
+                        cur, dth, dp, moved = r, cand[0], cand[1], True
+                if not moved:
+                    break
+        dx, dy, pk, rmap, (i, j) = cur
+        nx, ny = rmap.shape
+        r2 = rmap.copy()
+        r2[np.ix_([(i + a) % nx for a in range(-2, 3)], [(j + b) % ny for b in range(-2, 3)])] = -1
+        q = pk / max(1e-6, float(r2.max()))
+        c, s_ = math.cos(dth), math.sin(dth)
+        return c * dx - s_ * dy, s_ * dx + c * dy, dth, dp, pk, q
+
+    def rel_pitch(self, ga, gb):
+        """pitch change (rad) of the camera between two frames taken at (nearly) the same spot"""
+        key, kp, ld = self.key, self.key_pitch, self.last_dp
+        self.key, self.key_pitch, self.last_dp = ga, self.pitch0, 0.0
+        r = self._match(gb, (0.0, 0.0, 0.0), rad=0.08)
+        self.key, self.key_pitch, self.last_dp = key, kp, ld
+        return r[3], r[4], r[5], r[0]
+
+    def update(self, im, v, w, dt, compass):
+        """im: rear camera image (float RGB) after the step; v, w, dt: the command just executed."""
+        g = gray_of(im)
+        if self.h is None:
+            self.h = compass
+        if self.key is None:
+            self.key = g; self.key_xy = np.array([self.x, self.y]); self.key_h = self.h
+            self.rel = np.zeros(3)
+            return
+        # predicted motion since the last frame: recent measured velocity, but never more than
+        # commanded (when the cart drags the robot barely moves although the command says it does)
+        sp_cmd = v * dt
+        sp_meas = float(self.vel[0]) * dt
+        if sp_cmd * sp_meas <= 0:
+            step = 0.0
+        else:
+            step = math.copysign(min(abs(sp_cmd), abs(sp_meas) * 1.3 + 0.004), sp_cmd)
+        th = self.rel[2]
+        pred = (self.rel[0] + step * math.cos(th), self.rel[1] + step * math.sin(th), th + w * dt)
+        sx, sy, dth, dp, pk, q = self._match(g, pred, rad=0.06 + abs(sp_cmd))
+        ok = q > 2.0 and pk > 0.08
+        self.q = q
+        old = self.rel.copy()
+        if ok:
+            self.rel = np.array([sx, sy, dth]); self.n_ok += 1
+        else:
+            self.rel = np.array(pred); self.n_bad += 1
+        # velocity in the robot frame (approximately; the keyframe frame is close)
+        d = (self.rel[:2] - old[:2]) / max(dt, 1e-3)
+        self.vel = 0.6 * self.vel + 0.4 * d
+        # world heading: integrate the VO rotation, pulled toward the compass
+        hv = self.h - math.degrees(self.rel[2] - old[2])
+        self.h = (hv + 0.08 * wrap180(compass - hv)) % 360
+        self.key_h = (self.h + math.degrees(self.rel[2])) % 360
+        hk = math.radians(self.key_h)
+        fwd = np.array([math.sin(hk), math.cos(hk)]); left = np.array([-math.cos(hk), math.sin(hk)])
+        p = self.key_xy + self.rel[0] * fwd + self.rel[1] * left
+        self.x, self.y = float(p[0]), float(p[1])
+        if not ok or math.hypot(self.rel[0], self.rel[1]) > 0.15 or abs(self.rel[2]) > math.radians(8):
+            self.key = g; self.key_xy = p.copy(); self.key_h = self.h
+            # each keyframe is taken at the nominal pitch: chaining the per-frame pitch estimates
+            # from keyframe to keyframe random-walks and can lock into a large scale error
+            self.key_pitch = self.pitch0
+            self.last_dp = 0.0
+            self.rel = np.zeros(3)
+        else:
+            self.last_dp = dp
+
+
+# ----------------------------------------------------------------------------- home recognition
+def home_desc(im):
+    """compact high-passed grayscale view (80x60) for place recognition"""
+    g = gray_of(im)
+    g = g.reshape(60, 4, 80, 4).mean((1, 3))
+    return _highpass(g, 4)
+
+
+def home_match(cur, ref, dh_deg=0.0, du=14, dv=8):
+    """best normalized correlation of the central crop of `cur` inside `ref`. The horizontal
+    shift is fixed (+-2 px) by the compass heading difference dh_deg = heading_cur - heading_ref
+    (so a sideways image shift can't stand in for a change of distance); the vertical shift is
+    searched because the bumps pitch the robot."""
+    c = cur[dv:60 - dv, du:80 - du]
+    c = (c - c.mean()) / (c.std() + 1e-6)
+    best = -1.0
+    hh, ww = c.shape
+    b0 = du + int(round(F / 4 * math.radians(dh_deg)))
+    for a in range(0, 2 * dv + 1):
+        for b in range(b0 - 2, b0 + 3):
+            if b < 0 or b > 2 * du:
+                continue
+            r = ref[a:a + hh, b:b + ww]
+            s = float((c * (r - r.mean())).mean() / (r.std() + 1e-6))
+            if s > best:
+                best = s
+    return best
+
+
 # ----------------------------------------------------------------------------- robot client
 class Bot:
     def __init__(self, debug=False):
@@ -205,6 +428,10 @@ class Bot:
         self.hf = None
         self.k = 0
         self.wall0 = time.time()
+        self.vo = GroundVO()
+        self._rear = None
+        self.home_rec = None     # optional per-tick callback with the rear image
+        self.home_refs = []      # (outbound arc length, home_desc, heading) rear views near the start
         if debug:
             os.makedirs(DBG_DIR, exist_ok=True)
 
@@ -228,12 +455,16 @@ class Bot:
         self._req("POST", "/run", json={"running": False})
         self.s = self._req("POST", "/reset", json={"scene": scene, "randomize": True, "seed": seed}).json()
         self.x = self.y = 0.0
+        self.vo = GroundVO()
+        self._rear = None
         return self.s
 
     def lockstep(self):
         self._req("POST", "/run", json={"running": False})
 
     def img(self, cam="front"):
+        if cam == "rear" and self._rear is not None and self.s is not None and self._rear[0] == self.s["time"]:
+            return self._rear[1]
         r = self._req("GET", "/camera/%s.png" % cam)
         self.last_png = r.content
         im = np.asarray(Image.open(io.BytesIO(r.content)).convert("RGB")).astype(np.float32)
@@ -285,11 +516,23 @@ class Bot:
     def hd(self):
         return self.s["compass_deg"]
 
+    def vpos(self):
+        return np.array([self.vo.x, self.vo.y])
+
     def drive(self, v, w, frames=DT_FRAMES):
-        self._req("POST", "/drive", json={"v": float(v), "w": float(w)})
+        v = float(v) if math.isfinite(v) else 0.0      # a NaN from a bad projection would make
+        w = float(w) if math.isfinite(w) else 0.0      # every request fail (not JSON compliant)
+        self._req("POST", "/drive", json={"v": v, "w": w})
         h0 = self.s["compass_deg"] if self.s else None
         self.s = self._req("POST", "/step", json={"frames": int(frames)}).json()
         h1 = self.s["compass_deg"]
+        if self.vo is not None:
+            r = self._req("GET", "/camera/rear.png")
+            im = np.asarray(Image.open(io.BytesIO(r.content)).convert("RGB")).astype(np.float32)
+            self._rear = (self.s["time"], im)
+            self.vo.update(im, v, w, frames / 60.0, h1)
+            if self.home_rec is not None:
+                self.home_rec(im)
         hm = h1 if h0 is None else (h0 + wrap180(h1 - h0) / 2.0)
         d = v * frames / 60.0
         self.x += d * math.sin(math.radians(hm))
@@ -301,7 +544,8 @@ class Bot:
             pred = self.hf - math.degrees(w * frames / 60.0)
             self.hf = (pred + 0.3 * wrap180(h1 - pred)) % 360
         if self.logging and (not self.path or math.hypot(self.x - self.path[-1][0], self.y - self.path[-1][1]) >= 0.2):
-            self.path.append((self.x, self.y, h1))
+            # dead-reckoned point (the route shape, used for steering) + the VO position (for distance)
+            self.path.append((self.x, self.y, h1, self.vo.x, self.vo.y))
         self.k += 1
         return self.s
 
@@ -309,6 +553,8 @@ class Bot:
         return self.drive(0, 0, frames)
 
     def latch(self, engage=True):
+        if engage and self._rear is not None:
+            self.pre_latch_rear = gray_of(self._rear[1])
         return self._req("POST", "/latch", json={"engage": engage}).json()["latched"]
 
     def pos(self):
@@ -367,8 +613,9 @@ def follow_route(bot, log):
     """driveway -> right onto lane -> lane to the street. Returns when the bins are close."""
     s_len = 0.0
     last = bot.pos().copy()
-    bot.path = [(bot.x, bot.y, bot.hd)]
+    bot.path = [(bot.x, bot.y, bot.hd, bot.vo.x, bot.vo.y)]
     bot.logging = True
+    s_vo, last_vo = 0.0, bot.vpos().copy()
     lane_heads = []
     widths = [2.2, 1.6, 1.1, 0.7, 0.4]
     wts = [0.7, 1.0, 1.0, 1.0, 1.5]
@@ -408,11 +655,18 @@ def follow_route(bot, log):
         p = bot.pos()
         s_len += float(np.hypot(*(p - last)))
         last = p.copy()
+        pv = bot.vpos()
+        s_vo += float(np.hypot(*(pv - last_vo)))
+        last_vo = pv.copy()
+        # home references: rear views every 0.5 m of the first stretch of the driveway
+        if s_vo < HOME_REF_LEN + 0.3 and s_vo >= 0.5 * len(bot.home_refs):
+            bot.home_refs.append((s_vo, home_desc(bot.img("rear")), bot.vo.h))
         if 45 < s_len < 68:
             lane_heads.append(bot.hd)
         if bot.k % 40 == 0:
-            log("follow t=%.1f s=%.1f x=%.1f y=%.1f hd=%.0f tb=%+d fr=%.1f score=%.2f clear=%.2f"
-                % (bot.s["time"], s_len, bot.x, bot.y, bot.hd, tb, fr_n, score[i], min_clear))
+            log("follow t=%.1f s=%.1f x=%.1f y=%.1f hd=%.0f tb=%+d fr=%.1f score=%.2f clear=%.2f | vo s=%.1f x=%.1f y=%.1f h=%.0f bad=%d/%d"
+                % (bot.s["time"], s_len, bot.x, bot.y, bot.hd, tb, fr_n, score[i], min_clear,
+                   s_vo, bot.vo.x, bot.vo.y, bot.vo.h, bot.vo.n_bad, bot.vo.n_ok + bot.vo.n_bad))
             min_clear = 9.0
             if bot.debug and bot.k % 200 == 0:
                 bot.save("follow_%04d" % bot.k)
@@ -571,6 +825,17 @@ def latch_on(bot, lane_h, log, max_tries=4):
         realign(bot, lane_h, log)
         ok = approach_and_latch(bot, lane_h, log)
         if ok:
+            # the cart on the hitch can pitch the robot, which changes the rear camera's ground
+            # projection (scale) used by the visual odometry: measure the pitch change across the
+            # latch and use it as the VO pitch prior while towing
+            bot.stop(6)
+            pre = getattr(bot, "pre_latch_rear", None)
+            if pre is not None:
+                dp, pk, q, dx = bot.vo.rel_pitch(pre, gray_of(bot.img("rear")))
+                log("pitch change across the latch: %+.2f deg (peak %.2f q %.1f, dx %.3f m)" % (math.degrees(dp), pk, q, dx))
+                if q > 3.0 and abs(dp) < math.radians(5):
+                    bot.vo.pitch0 = bot.vo.key_pitch = dp
+                    bot.vo.key = None          # new keyframe on the next frame
             return True
         log("latch attempt %d failed, backing out" % attempt)
         bot.latch(False)
@@ -693,12 +958,29 @@ def steer_bearing(im, pref_b, pref_w=0.5, widths=(2.2, 1.6, 1.1, 0.7, 0.4), wts=
     score -= pref_w * np.abs(BEARINGS - pref_b) / 40.0
     score[np.abs(BEARINGS) > 40] = -99
     i = int(np.argmax(score))
+    if fr_last[i] < 0.6:
+        # grass right behind the tail in every direction: head for the direction with the most
+        # pavement within 3 m instead of following the route preference
+        near = slice(0, int(3.0 / RSTEP))
+        gfrac = (pf[:, near] * _cnt[:, near]).sum(1) / np.maximum(_cnt[:, near].sum(1), 1)
+        gfrac = np.convolve(gfrac, np.ones(5) / 5, mode="same")
+        gfrac[np.abs(BEARINGS) > 40] = 9
+        i = int(np.argmin(gfrac + 0.1 * np.abs(BEARINGS - pref_b) / 40.0))
     return float(BEARINGS[i]), float(fr_last[i])
 
 
 def tow_home(bot, log, speed=0.5, look=2.0):
     """pull the cart home by reversing: steer from the REAR camera (pavement follower), with the
-    route (which branch to take) given by the logged outbound path, retraced backwards."""
+    route (which branch to take) given by the logged outbound path, retraced backwards.
+
+    Distance comes from visual odometry, not from the commands: while towing, the robot often
+    turns the cart rather than backing up, so commanded speed x time over-counts. The logged
+    (dead-reckoned) path only gives the shape of the route for steering. The tow ends when
+      - the rear view matches the reference views stored near the start (home recognised), or
+      - the VO distance towed reaches the VO length of the outbound route (with the view
+        allowed to extend that by a few metres if it clearly says home is still ahead).
+    Once the logged route runs out (it is too short, because of the dead-reckoning over-count),
+    keep backing along the driveway with the pavement follower."""
     bot.logging = False
     t0 = bot.s["time"]
     # 1. straight back out to the staging row (1 m clear of the gray cart's swing), then pivot
@@ -707,43 +989,140 @@ def tow_home(bot, log, speed=0.5, look=2.0):
         bot.drive_to(np.array(bot.S), v=0.3, reverse=True)
         bot.turn_to(bot.west_h, wmax=0.5, tol=3)
     pts = np.array([p[:2] for p in bot.path])[::-1]
+    vop = np.array([p[3:5] for p in bot.path])
+    route_len = float(np.sum(np.hypot(*np.diff(vop, axis=0).T)))     # VO length of the way out
+    log("tow: outbound route %.1f m by visual odometry (%.1f m dead-reckoned)"
+        % (route_len, float(np.sum(np.hypot(*np.diff(pts, axis=0).T)))))
     j = 0
     while j < len(pts) - 1 and np.hypot(*(pts[j] - bot.pos())) < 0.5:
         j += 1
     tow_trace = []
     min_clear, n_near = 9.0, 0
+    tb_s, w_prev = 0.0, 0.0
+    n_pivot = n_tick = n_stuck = 0
+    hist = []
+    refs = bot.home_refs
+    ref_s = np.array([r[0] for r in refs]) if refs else np.zeros(0)
+    vis = []                     # (togo_vo, s_vis, score, contrast)
+    dbg_rec = []
+    towed = 0.0                  # VO distance towed
+    last_v = bot.vpos().copy()
+    route_done = False           # the logged (dead-reckoned) route ran out
+    h_start = refs[0][2] if refs else None
+    why = "?"
     while True:
+        pv = bot.vpos()
+        towed -= float(np.dot(pv - last_v, hvec(bot.vo.h)))   # signed: backing up counts, easing forward subtracts
+        last_v = pv.copy()
+        togo = route_len - towed                             # VO distance still to go
         while j < len(pts) - 1 and np.hypot(*(pts[j] - bot.pos())) < look:
             j += 1
         tgt = pts[j]
         d = float(np.hypot(*(tgt - bot.pos())))
         back_h = (bot.hd + 180) % 360
         e = wrap180(heading_of(tgt - bot.pos()) - back_h)   # + = route goes clockwise of travel
-        if j == len(pts) - 1:
+        if j == len(pts) - 1 and not route_done:
             seg = pts[-1] - pts[max(0, len(pts) - 8)]
             seg = seg / max(1e-6, float(np.hypot(*seg)))
             if d < 0.15 or float(np.dot(pts[-1] - bot.pos(), seg)) < 0.05:
-                break
+                route_done = True
+                log("  logged route ends (dead reckoning); VO says %.1f m still to go" % togo)
+        im = bot.img("rear")
+        # ---- home recognition near the end
+        if len(refs) > 3 and togo < HOME_REF_LEN + 8 and n_tick % 3 == 0:
+            cd = home_desc(im)
+            sc = np.array([home_match(cd, r[1], wrap180(bot.vo.h - r[2])) for r in refs])
+            b = int(np.argmax(sc))
+            contrast = float(sc[b] - np.median(sc))
+            vis.append((togo, float(ref_s[b]), float(sc[b]), contrast))
+            if bot.debug:
+                dbg_rec.append((bot.s["time"], togo, cd, bot.vo.h))
+            if n_tick % 30 == 0:
+                log("  home view: VO says %.1f m to go, best ref %.1f m (score %.2f, contrast %.2f)"
+                    % (togo, ref_s[b], sc[b], contrast))
+        conf = [v_[1] for v_ in vis[-5:] if v_[2] > 0.5 and v_[3] > 0.1]
+        s_vis = float(np.median(conf)) if len(conf) >= 3 else None
+        if s_vis is not None and s_vis <= 0.5 and togo < 4.0:
+            why = "home recognised"
+            break
+        if togo < 0.3 and not (s_vis is not None and s_vis >= 1.5 and togo > -1.5):
+            why = "VO distance reached the route length"
+            break
+        if togo < -2.0:
+            why = "VO distance 2 m past the route length"
+            break
+        if bot.s["time"] - t0 > 500:
+            why = "timeout"
+            break
         pref_b = float(np.clip(-e, -40, 40))                # rear camera: + = its left = CCW of travel
         remaining = d + 0.2 * (len(pts) - 1 - j)
-        im = bot.img("rear")
-        if remaining < 3.0:
-            # last few metres: keep straight (the start is straight in front of the garage)
+        if route_done:
+            # past the logged route: follow the driveway, holding the heading we had at the start
+            # (the start faces straight down the driveway; behind it the pavement ends, so the
+            # pavement follower alone would turn off along the garage apron)
+            ph = float(np.clip(wrap180(bot.hd - h_start), -20, 20)) if h_start is not None else 0.0
+            tb, fr = steer_bearing(im, ph, pref_w=1.5)
+            tb = float(np.clip(tb, -8, 8))
+        elif remaining < 3.0:
             tb, fr = steer_bearing(im, 0.0, pref_w=1.5)
             tb = float(np.clip(tb, -6, 6))
         else:
             tb, fr = steer_bearing(im, pref_b, pref_w=1.0)
             if abs(e) > 50:                                  # sharp corner of the route: mostly pivot
                 tb = pref_b
-        if j == len(pts) - 1:
+        # smooth the steering target: on bumpy ground the pitching robot makes the projected
+        # pavement map jump from frame to frame; react to the trend, not to single frames.
+        # This keeps the follower out of its slow pivot mode most of the time.
+        tb_s += 0.5 * (tb - tb_s)
+        a = abs(tb_s)
+        if j == len(pts) - 1 and not route_done:
             v = -min(speed, max(0.08, d))
-        elif abs(tb) < 12 and fr > 2.0:
+        elif route_done:
+            v = -0.3 if a < 12 else -0.2
+        elif a < 12 and fr > 2.0:
             v = -speed
-        elif abs(tb) < 30:
+        elif a < 30:
             v = -0.25
         else:
             v = -0.08
-        w = float(np.clip(math.radians(tb) * 1.6, -0.7, 0.7))
+            n_pivot += 1
+        n_tick += 1
+        w = float(np.clip(math.radians(tb_s) * 1.6, -0.7, 0.7))
+        w = float(np.clip(w, w_prev - 0.15, w_prev + 0.15))  # rate limit
+        # stall check (the VO shows neither motion nor rotation although we are driving): ease
+        # forward a little, or back straight out, and try again
+        hist.append((pv[0], pv[1], bot.vo.h, bot.x, bot.y))
+        if len(hist) > 30:
+            hist.pop(0)
+            if (math.hypot(hist[-1][0] - hist[0][0], hist[-1][1] - hist[0][1]) < 0.05
+                    and abs(wrap180(hist[-1][2] - hist[0][2])) < 3.0):
+                n_stuck += 1
+                log("  stalled (no motion for 1.5 s, cmd v=%.2f w=%.2f): try %d" % (v, w, n_stuck))
+                if bot.debug and n_stuck <= 6:
+                    bot.save("stall%d_rear" % n_stuck, "rear")
+                # odd tries: pull forward ~0.45 m, then back straight through with a firm command
+                # (a run-up over the bump). Even tries: pull forward ~0.75 m and come back on a
+                # slightly different line (alternately left / right), in case the cart, which is
+                # wider than the robot and swings out on turns, catches on something beside the line.
+                kind = 1 if n_stuck % 2 else (2 if n_stuck % 4 == 2 else 3)
+                # the route is followed on the dead-reckoned pose: don't let the recovery moves
+                # (or the stall itself) push it along the route; take the net motion from the VO
+                dr0, vo0 = np.array(hist[0][3:5]), np.array(hist[0][:2])
+                for _ in range(30 if kind == 1 else 50):
+                    bot.drive(0.3, 0.0)
+                if kind == 1:
+                    for _ in range(25):
+                        bot.drive(-0.8, 0.0)
+                else:
+                    for _ in range(30):
+                        bot.drive(-0.3, 0.35 if kind == 2 else -0.35)
+                    for _ in range(20):
+                        bot.drive(-0.3, -0.35 if kind == 2 else 0.35)
+                bot.x, bot.y = dr0 + (bot.vpos() - vo0)
+                hist.clear()
+                tb_s, w_prev = 0.0, 0.0
+                continue
+        w_prev = w
         gnear = grass_mask(im)[_NEAR_ROWS]
         if gnear.any():
             c_now = float(np.min(np.abs(GL[_NEAR_ROWS][gnear])))
@@ -753,15 +1132,22 @@ def tow_home(bot, log, speed=0.5, look=2.0):
         bot.drive(v, w)
         tow_trace.append((bot.x, bot.y))
         if bot.k % 100 == 0:
-            log("tow t=%.1f x=%.1f y=%.1f hd=%.0f j=%d/%d e=%+.0f tb=%+.0f fr=%.1f latched=%s"
-                % (bot.s["time"], bot.x, bot.y, bot.hd, j, len(pts), e, tb, fr, bot.s["latched"]))
+            log("tow t=%.1f x=%.1f y=%.1f hd=%.0f j=%d/%d e=%+.0f tb=%+.0f/%+.0f fr=%.1f towed(VO)=%.1f to go=%.1f "
+                "pivot%%=%.0f vo_bad=%d/%d latched=%s"
+                % (bot.s["time"], bot.x, bot.y, bot.hd, j, len(pts), e, tb, tb_s, fr, towed, togo,
+                   100.0 * n_pivot / max(1, n_tick), bot.vo.n_bad, bot.vo.n_ok + bot.vo.n_bad, bot.s["latched"]))
             if bot.debug and bot.k % 400 == 0:
                 bot.save("tow_rear_%05d" % bot.k, "rear")
-        if bot.s["time"] - t0 > 500:
-            log("tow timeout"); break
     bot.stop()
-    log("tow finished: closest grass seen 0.3-0.8 m behind the tail: %.2f m to the side" % min_clear)
+    log("tow finished (%s): VO towed %.1f of %.1f m, closest grass seen 0.3-0.8 m behind the tail: %.2f m "
+        "to the side, pivot ticks %.0f%%" % (why, towed, route_len, min_clear, 100.0 * n_pivot / max(1, n_tick)))
     bot.save("home_rear", "rear")
+    if bot.debug and dbg_rec:
+        np.savez_compressed(os.path.join(DBG_DIR, "home_rec.npz"),
+                            t=np.array([r[0] for r in dbg_rec]), s=np.array([r[1] for r in dbg_rec]),
+                            d=np.array([r[2] for r in dbg_rec]), ref_s=ref_s,
+                            ref_d=np.array([r[1] for r in refs]), ref_h=np.array([r[2] for r in refs]),
+                            h=np.array([r[3] for r in dbg_rec]))
     return tow_trace
 
 
@@ -809,6 +1195,9 @@ def main():
                 bot.turn_to(h0 + dh, tol=1.5); bot.save("ref_%+d" % dh)
             bot.turn_to(h0, tol=1.5)
             bot.x = bot.y = 0.0
+        # reference view of home: the rear camera, standing at the start (looks at the garage end)
+        bot.home_refs = [(0.0, home_desc(bot.img("rear")), bot.avg_heading(10))]
+        bot.save("home_ref", "rear")
         s_len, lane_h, bin_wp = follow_route(bot, log)
         log("reached the bins: path %.1f m, lane heading %.1f, cart near %s, t=%.1f" % (s_len, lane_h, np.round(bin_wp, 2), bot.s["time"]))
         bot.stop()
@@ -834,7 +1223,7 @@ def main():
     bot.save_map("map", trace)
     bot.stop()
     s = bot.sensors()
-    log("done: t=%.1f latched=%s dr pos (%.2f, %.2f) hd=%.0f" % (s["time"], s["latched"], bot.x, bot.y, s["compass_deg"]))
+    log("done: t=%.1f latched=%s dr pos (%.2f, %.2f) vo pos (%.2f, %.2f) hd=%.0f wall %.0fs" % (s["time"], s["latched"], bot.x, bot.y, bot.vo.x, bot.vo.y, s["compass_deg"], time.time() - wall0))
     if a.verify:   # dev only: drop the cart and look around to compare with the start views
         h0 = bot.path[0][2]
         bot.latch(False)

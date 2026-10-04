@@ -92,7 +92,16 @@ When you're done, stop the robot and switch back to real time
   ≤ 0.25 m/s near a bin, and ≤ 0.5 m/s while towing.
 - The compass counts clockwise, so turning **left** (`w > 0`) makes `compass_deg` go
   **down**.
-- The ground is flat. Tree trunks and the houses are solid; don't hit them.
+- On `flat` and `anna_pl` the ground is flat. On `anna_pl_scan` it's the real scanned ground. It is
+  sloped (about 5° in places on the driveway) and bumpy, with 10 cm resolution, and the robot pitches
+  and rolls with it. The ground-projection formulas below assume level ground, so expect errors there.
+- **The robot can physically stall.** Its ground clearance is only about 6 cm, and its body overhangs
+  the drive wheels by about 0.2 m at the back (the front caster carries the nose). So a bump of ~8 cm
+  can stop it, especially when it's reversing into the bump tail-first with a cart on the nose. On
+  `anna_pl_scan` there's such a hump on one half of the driveway, roughly 12–13 m from the garage;
+  the other half is smooth. If commanded motion produces no motion in the camera image, you're stuck.
+  Back off and try a different line.
+- Tree trunks and the houses are solid; don't hit them.
 
 ## What the world looks like
 
@@ -230,6 +239,11 @@ The sim records the true trajectory, which you can't see. A run is scored on:
   of where the robot started.
 - **Pavement:** time spent with any wheel on grass. Less is better; zero is the goal.
 - **Time:** sim seconds, including the time used for re-tries.
+
+Route notes for the way home:
+- The lane continues past the driveway mouth, so it's possible to overshoot the turn.
+- The cameras see about ±43° horizontally, so while reversing up the lane the rear camera doesn't
+  see the driveway branch until the robot is nearly level with it.
 
 "Home" means back in front of the garage, where the driveway starts. Recognize it from the
 camera: the end of the concrete driveway, with the house's garage doors.
