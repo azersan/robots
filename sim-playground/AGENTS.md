@@ -89,7 +89,7 @@ Static facts about the current scene. Read it once after connecting and again af
 scene change.
 ```json
 {
-  "scene": "anna_pl", "scenes": ["flat", "anna_pl"],
+  "scene": "anna_pl", "scenes": ["flat", "anna_pl", "anna_pl_scan"],
   "cameras": {"front": {"width": 320, "height": 240, "fov": 70.0},
               "chase": {"width": 480, "height": 320, "fov": 60.0},
               "overhead": {"width": 512, "height": 512, "fov": 50.0}},

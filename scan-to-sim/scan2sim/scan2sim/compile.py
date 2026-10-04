@@ -139,7 +139,7 @@ def compile_bundle(path: Path, out: Path | None = None, cell: float = 0.05, mass
         "heightfield": {"x0": hf.x0, "y0": hf.y0, "cell": hf.cell, "shape": list(hf.z.shape),
                         "measured_fraction": round(float(hf.measured.mean()), 4),
                         "z_range": [round(float(hf.z.min()), 4), round(float(hf.z.max()), 4)],
-                        "file": "ground.hfield.bin"},
+                        "file": "ground.hfield.bin", "mask": "ground.mask.bin"},
         "ground": ground_stats,
         "usd_ground_cell": usd_hf.cell,
         "ground_faces": int(len(ground_visual.faces)),

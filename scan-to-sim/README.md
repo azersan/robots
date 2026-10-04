@@ -38,12 +38,41 @@ Requires a LiDAR device (iPhone 12 Pro or newer Pro, or iPad Pro). Signing uses 
 | `objects/<name>.glb` | one per tagged object |
 | `keyframes/NNNNN.heic` / `.depth.f32` / `.conf.u8` | image, float32 depth (m), uint8 confidence |
 | `poses.json` | per keyframe: camera-to-world (row-major), intrinsics, sizes |
-| `preview.usdz` | Y-up Quick Look preview |
+| `preview.obj` | Y-up preview (iOS can't write USDZ via ModelIO, so this falls back to OBJ) |
 
 Frame: meters, Z-up, right-handed; sim = (x, −z, y) of ARKit world, origin at the start
 point projected to the ground. The `.glb` files store sim-frame coordinates directly
 (not glTF's usual Y-up), so the PC-side `scan2sim` compiler reads them as-is.
 
-## Not yet built
+## Scanning tips (learned on the driveway)
 
-The PC-side `scan2sim` compiler (texturing, ground fit, CoACD, USD/MJCF) lives in `scan2sim/`.
+- Start at the end you want as the sim origin (the garage for Anna Pl), facing down the path. Bounds **Off**
+  for long paths; use `--corridor` in scan2sim instead.
+- Walk out slowly with the phone low and tilted down, then walk back the same way.
+- Finish where you started, **facing walls, posts or edges you saw at the start**: the drift report needs
+  upright structure in common (smooth ground alone can't pin down drift, and it then says "unreliable").
+- Tag each object once (a second tap inside a tag's sphere is refused).
+- A full out-and-back of ~90 m exports roughly 400 MB; AirDrop it to `~/Documents/Meshes`.
+
+## From a scan to the sim playground
+
+```bash
+# 1. Compile the bundle (Mac or PC): ground heightfield, collision, USD + MJCF, drift report.
+cd scan-to-sim/scan2sim
+python -m scan2sim ~/Documents/Meshes/<name>.scan.zip --corridor 3 --ground depth --check
+
+# 2. Turn it into sim-playground terrain for the Anna Pl site (writes sim-playground/terrain/anna_pl.npz).
+cd ../../sim-playground
+python tools/import_scan.py ~/Documents/Meshes/<name>.scan
+
+# 3. Commit terrain/anna_pl.npz; on the NZXT run the scene `anna_pl_scan` (see sim-playground/README.md).
+```
+
+- `--ground depth` matters for out-and-back walks: drift between the two passes otherwise leaves phantom
+  10–15 cm steps in the ground that stop the car. Details and every option: [`scan2sim/README.md`](scan2sim/README.md).
+- `import_scan.py` places the scan by fitting the walked path onto the site's traced route and fills the
+  unscanned part of the site smoothly (marked as unmeasured).
+
+Status (2026-10-03): the first driveway scan covers ~45 m from the garage (half the route). In the playground,
+`tow_home.py` fetched and towed a bin home on that ground in 2/2 trials. Next: scan the full ~90 m route,
+finishing at the start facing the garage, and re-import.

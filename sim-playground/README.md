@@ -95,6 +95,8 @@ curl -s -X POST localhost:8642/api/drive -H 'content-type: application/json' -d 
 
 - `simpg/sim.py`: the Newton model (car, bins, scenes, hitch, cameras)
 - `simpg/site_anna_pl.py`: the driveway layout traced from the satellite screenshot (pixel coordinates and scale)
+- `simpg/terrain.py`, `terrain/anna_pl.npz`: scanned ground for `anna_pl_scan` (heightfield, site frame)
+- `tools/import_scan.py`: turns a phone LiDAR scan (`scan-to-sim/`) into `terrain/<site>.npz`
 - `simpg/gateway.py`, `simpg/viewer.html`: HTTP API and web viewer
 - `controllers/fetch_bin.py`: route following, docking, latching
 - `controllers/perception.py`: bin detection from the depth camera (fits the bin's known footprint)
@@ -120,6 +122,30 @@ curl -s -X POST localhost:8642/api/drive -H 'content-type: application/json' -d 
   own μ decides.
 - **Anna Pl scene:** flat ground. The pavement is visual only; houses and tree trunks are solid. The scale
   (`M_PER_PX`) is estimated from house and road widths.
+- **Anna Pl, scanned (`anna_pl_scan`):** the same layout on the real ground from the iPhone LiDAR scan (see
+  [Scanned terrain](#scanned-terrain)). Physics is a 10 cm heightfield; grass and pavement are draped over it,
+  and the car, bins, houses and trees sit on it.
+
+## Scanned terrain
+
+`anna_pl_scan` puts the Anna Pl layout on ground scanned with the ScanToSim iPhone app
+([`../scan-to-sim/`](../scan-to-sim/README.md)). The current scan covers the first ~45 m from the garage: the
+driveway climbs about 2 m from the garage up to the lane. The rest of the route (down the lane to the bins) is
+not scanned yet and is filled smoothly from the nearest scanned ground, so treat it as a placeholder.
+
+To update it from a new scan (on the Mac, then copy `terrain/anna_pl.npz` into the repo):
+
+```bash
+cd scan-to-sim/scan2sim
+python -m scan2sim ~/Documents/Meshes/<name>.scan.zip --corridor 3 --ground depth
+cd ../../sim-playground
+python tools/import_scan.py ~/Documents/Meshes/<name>.scan     # writes terrain/anna_pl.npz
+```
+
+`import_scan.py` places the scan by fitting the walked path onto the traced route (rigid: rotation + shift,
+since the scan is metric). For the first scan: the path matched the route within 0.43 m (median), and the scan
+started 1.9 m from S. Physics needs `use_mujoco_contacts=False` (already the default here): MuJoCo Warp's own
+heightfield contacts sat 10-15 cm above this terrain and launched the car.
 
 ## Results so far
 
@@ -137,6 +163,7 @@ Fetch the bin **and tow it home**:
 |---|---|---|---|---|
 | `tow_home.py` (seeds 1–3) | depth camera + true pose | 3/3, bin 1.06 m from start | not measured | ~186 s |
 | `robot_tow_home.py` (seeds 1–3) | **robot API only**: two color cameras, compass, directions | 3/3, bin 1.7–2.1 m from start | **0 s** (robot and bin) | ~350 s |
+| `tow_home.py --scene anna_pl_scan` (seeds 1–2) | depth camera + true pose, **scanned ground** | 2/2, bin 1.02–1.07 m from start | not measured | 186–255 s |
 
 Both controllers were written by sub-agents. `robot_tow_home.py` was written from
 [ROBOT.md](ROBOT.md) alone. Score runs with `tools/score_episodes.py`.

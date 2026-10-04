@@ -50,7 +50,8 @@ bins' locations.
 
 - **`reset`** puts you back at the start. `randomize` (default `true`) jitters your start
   pose and the bins a little, seeded by `seed`.
-- **Scenes:** `anna_pl` is the real job (a ~90 m driveway run). `flat` is a short concrete
+- **Scenes:** `anna_pl` is the real job (a ~90 m driveway run). `anna_pl_scan` is the same run on the
+  real, scanned ground (the driveway climbs ~2 m from the garage to the lane). `flat` is a short concrete
   pad with the bins straight ahead, good for practicing the dock.
 
 ## Time: lockstep vs real time

@@ -1,6 +1,6 @@
 """Sim Gateway: HTTP API in front of the simulator.
 
-    python -m simpg.gateway [--scene flat|anna_pl] [--port 8642] [--paused]
+    python -m simpg.gateway [--scene flat|anna_pl|anna_pl_scan] [--port 8642] [--paused]
 
 Two ways to drive time:
   * real time: the gateway steps the sim itself (POST /api/run {"running": true})

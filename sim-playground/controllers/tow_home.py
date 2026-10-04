@@ -232,8 +232,8 @@ class Run:
             self.tick(0.0, 0.0, "stop")
 
 
-def run_trial(gw, seed, randomize=True, verbose=1, timeout=600.0):
-    st = gw.reset(scene="anna_pl", randomize=randomize, seed=seed)
+def run_trial(gw, seed, randomize=True, verbose=1, timeout=600.0, scene="anna_pl"):
+    st = gw.reset(scene=scene, randomize=randomize, seed=seed)
     info = gw.info()
     gw.lockstep()
     gw.post("/api/config", cmd_timeout=1.0)
@@ -273,6 +273,7 @@ def run_trial(gw, seed, randomize=True, verbose=1, timeout=600.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8642")
+    ap.add_argument("--scene", default="anna_pl", help="anna_pl, or anna_pl_scan for the scanned ground")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--trials", type=int, default=1)
     ap.add_argument("--no-randomize", action="store_true")
@@ -284,7 +285,7 @@ def main():
         for i in range(args.trials):
             seed = args.seed + i
             print(f"trial seed={seed}", flush=True)
-            r = run_trial(gw, seed, not args.no_randomize, verbose=0 if args.quiet else 1)
+            r = run_trial(gw, seed, not args.no_randomize, verbose=0 if args.quiet else 1, scene=args.scene)
             print("  ->", r, flush=True)
             results.append(r)
     finally:

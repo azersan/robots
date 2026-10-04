@@ -30,6 +30,7 @@ Output goes to `<bundle>.scan/sim/`:
 | --- | --- |
 | `scene.usda` | Newton / Isaac Sim scene: Z-up, meters, UsdPhysics. Ground collider = heightfield mesh, background = static triangle mesh, tagged objects = rigid bodies with convex colliders. Visuals carry per-vertex colors from the keyframes. |
 | `scene.xml` | MuJoCo fallback: heightfield ground (`ground.hfield.bin`), free-jointed objects. Background is visual-only here. |
+| `ground.hfield.bin`, `ground.mask.bin` | Heightfield (int32 rows, int32 cols, float32 z, row 0 = lowest y) and which cells were scanned (uint8) |
 | `collision/*.obj` | Convex collision pieces per object (sim frame). |
 | `meshes/*.obj` | Meshes referenced by the MJCF. |
 | `report.json` | Heightfield extent and coverage, face counts, objects, texture coverage. |
@@ -56,9 +57,10 @@ Output goes to `<bundle>.scan/sim/`:
 `--check` drops a 20 cm box at the scan origin in MuJoCo and verifies it rests on the ground, and that tagged objects
 stay put. `--newton` runs the same test through `newton.ModelBuilder.add_usd`.
 
-Known issue (Newton 1.6, XPBD solver, CPU): the box rests correctly, but rigid bodies that *start* in contact with the
-triangle-mesh ground get launched. Test on the PC with Newton's MuJoCo solver (`SolverMuJoCo`, needs a matching
-`mujoco-warp`) before tuning anything.
+Newton notes (1.6, tested on the NZXT's RTX 5090): MuJoCo Warp's own heightfield contacts put this terrain's
+surface 10–15 cm too high and launched objects; with `SolverMuJoCo(use_mujoco_contacts=False)` plus Newton's
+`CollisionPipeline` the ground is exact (the sim playground already does this). Newton's XPBD solver also
+launches rigid bodies that start in contact with a triangle-mesh ground, so prefer the heightfield.
 
 Synthetic end-to-end test (sloped driveway, barrel, wall, ray-traced keyframes; plus a walked path
 out and back with planted drift to test the drift report and corridor):

@@ -148,9 +148,16 @@ def chaikin(pts, iterations=3):
     return pts
 
 
-def ribbon(pts, width, tile, z=0.0, tex=None, smooth=3):
-    """Flat strip along a polyline (smoothed), UV-mapped along its length."""
+def ribbon(pts, width, tile, z=0.0, tex=None, smooth=3, height_fn=None, step=0.5, columns=4):
+    """Strip along a polyline (smoothed), UV-mapped along its length. Flat at `z`, or with `height_fn(x, y)`
+    draped over the ground at `z` above it (resampled every `step` m, `columns` quads across)."""
     p = np.asarray(chaikin(pts, smooth) if smooth else pts, np.float64)
+    if height_fn is not None:
+        s_raw = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))])
+        si = np.linspace(0.0, s_raw[-1], max(2, int(s_raw[-1] / step) + 1))
+        p = np.stack([np.interp(si, s_raw, p[:, 0]), np.interp(si, s_raw, p[:, 1])], axis=1)
+    else:
+        columns = 1
     seg = np.diff(p, axis=0)
     seg /= np.linalg.norm(seg, axis=1, keepdims=True) + 1e-12
     tang = np.vstack([seg[0], seg[:-1] + seg[1:], seg[-1]])
@@ -158,16 +165,36 @@ def ribbon(pts, width, tile, z=0.0, tex=None, smooth=3):
     left = np.stack([-tang[:, 1], tang[:, 0]], axis=1)
     s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))])
     verts, uvs = [], []
+    across = np.linspace(-1.0, 1.0, columns + 1)
     for i in range(len(p)):
-        for side in (-1.0, 1.0):
+        for side in across:
             q = p[i] + left[i] * side * width / 2
             verts.append((q[0], q[1], z))
             uvs.append(((side + 1) * width / 4 / tile, s[i] / tile))
+    k = columns + 1
     faces = []
     for i in range(len(p) - 1):
-        a, b, c, d = 2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 3
-        faces += [a, c, b, b, c, d]
-    return _mesh(verts, faces, normals=[(0, 0, 1)] * len(verts), uvs=uvs, tex=tex)
+        for j in range(columns):
+            a, b, c, d = i * k + j, i * k + j + 1, (i + 1) * k + j, (i + 1) * k + j + 1
+            faces += [a, c, b, b, c, d]
+    if height_fn is None:
+        return _mesh(verts, faces, normals=[(0, 0, 1)] * len(verts), uvs=uvs, tex=tex)
+    v = np.asarray(verts, np.float64)
+    v[:, 2] += height_fn(v[:, 0], v[:, 1])
+    return _mesh(v, faces, normals=_vertex_normals(v, faces), uvs=uvs, tex=tex)
+
+
+def ground_grid(x0, y0, x1, y1, step, tile, height_fn, tex=None):
+    """Grass sheet draped over the terrain, UV-tiled every `tile` m."""
+    xs = np.linspace(x0, x1, max(2, int((x1 - x0) / step) + 1))
+    ys = np.linspace(y0, y1, max(2, int((y1 - y0) / step) + 1))
+    gx, gy = np.meshgrid(xs, ys)
+    v = np.stack([gx.ravel(), gy.ravel(), height_fn(gx.ravel(), gy.ravel())], axis=1)
+    nx = len(xs)
+    i = (np.arange(len(ys) - 1)[:, None] * nx + np.arange(nx - 1)[None, :]).ravel()
+    faces = np.stack([i, i + 1, i + nx, i + 1, i + nx + 1, i + nx], axis=1).ravel()
+    uvs = np.stack([v[:, 0] / tile, v[:, 1] / tile], axis=1)
+    return _mesh(v, faces, normals=_vertex_normals(v, faces), uvs=uvs, tex=tex)
 
 
 def tapered_cylinder(r0, r1, height, segments=16, tile=(1.0, 1.0), tex=None, jitter=0.0, rng=None):

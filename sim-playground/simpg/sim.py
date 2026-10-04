@@ -18,6 +18,7 @@ from newton.sensors import SensorTiledCamera
 
 from . import meshes
 from . import site_anna_pl as site
+from .terrain import Terrain
 
 wp.config.quiet = True
 
@@ -164,11 +165,21 @@ class SceneSpec:
     route: list = field(default_factory=list)  # [(x, y)] reference path, if any
     bounds: tuple = (-10.0, -10.0, 10.0, 10.0)  # xmin, ymin, xmax, ymax for the overhead view
     directions: str = ""  # plain-language directions for a robot that only has its camera
+    terrain: Terrain | None = None  # scanned ground; None = flat at z = 0
 
 
-def add_car(builder, x, y, yaw):
+# Footprints used to spawn things on sloped ground without starting inside it (half x, half y).
+CAR_FOOTPRINT = (CHASSIS_HALF[0], TRACK / 2 + WHEEL_HALF_WIDTH)
+
+
+def ground_under(terrain, x, y, yaw=0.0, half=(0.0, 0.0)):
+    """Ground height for placing something at (x, y): 0 when flat, else the highest point under its footprint."""
+    return 0.0 if terrain is None else terrain.support(x, y, yaw, *half)
+
+
+def add_car(builder, x, y, yaw, z0=0.0):
     chassis = builder.add_link(
-        xform=wp.transform(p=wp.vec3(x, y, CHASSIS_Z0), q=_quat_z(yaw)), label="car"
+        xform=wp.transform(p=wp.vec3(x, y, z0 + CHASSIS_Z0), q=_quat_z(yaw)), label="car"
     )
     # ~17 kg chassis: a real tug carries its battery low for traction.
     body_cfg = newton.ModelBuilder.ShapeConfig(density=600.0, mu=0.6, gap=0.01)
@@ -243,10 +254,10 @@ class Look:
         return (tex, (1.0, 1.0, 1.0)) if tex is not None else (None, FALLBACK[kind])
 
 
-def add_bin(builder, x, y, yaw, kind, label, look):
+def add_bin(builder, x, y, yaw, kind, label, look, z0=0.0):
     t = BIN_TYPES[kind]
     hx, hy, hz = bin_half(kind)
-    body = builder.add_link(xform=wp.transform(p=wp.vec3(x, y, hz + 0.002), q=_quat_z(yaw)), label=label)
+    body = builder.add_link(xform=wp.transform(p=wp.vec3(x, y, z0 + hz + 0.002), q=_quat_z(yaw)), label=label)
     # Physics: one box. Low effective friction: a real cart rides on its wheels with only the lip sliding.
     cfg = newton.ModelBuilder.ShapeConfig(density=t["mass"] / (8 * hx * hy * hz), mu=0.25, gap=0.01)
     hidden = copy.copy(cfg)
@@ -304,20 +315,32 @@ def add_bin(builder, x, y, yaw, kind, label, look):
     return body, joint
 
 
-def add_ground(builder, look, bounds, margin=250.0):
-    """Invisible physics plane plus a textured grass quad well past the horizon trees."""
+def add_ground(builder, look, bounds, margin=250.0, terrain=None):
+    """Invisible physics ground plus textured grass well past the horizon trees. With terrain: a heightfield
+    collider and grass draped over it; the plane and far grass sit just below its lowest point."""
     plane = copy.copy(GROUND_CFG)
     plane.is_visible = False
-    builder.add_ground_plane(cfg=plane)
+    base = 0.0 if terrain is None else float(terrain.z.min()) - 0.05
+    builder.add_ground_plane(height=base, cfg=plane)
     x0, y0, x1, y1 = bounds
     tex, color = look.surface("grass")
     builder.add_shape_mesh(
-        -1, mesh=meshes.ground_quad(x0 - margin, y0 - margin, x1 + margin, y1 + margin, tile=2.0, tex=tex),
+        -1, mesh=meshes.ground_quad(x0 - margin, y0 - margin, x1 + margin, y1 + margin, tile=2.0, z=base, tex=tex),
         cfg=_visual(), color=color, label="grass",
     )
+    if terrain is not None:
+        terrain.add_physics(builder, plane)
+        tx0, ty0, tx1, ty1 = terrain.bounds
+        builder.add_shape_mesh(
+            # 3 cm under the true surface: the grass sheet and the pavement follow the terrain with different
+            # triangles, and on bumpy ground the grass would otherwise poke through the pavement.
+            -1, mesh=meshes.ground_grid(tx0, ty0, tx1, ty1, step=0.5, tile=2.0,
+                                        height_fn=lambda x, y: terrain.height(x, y) - 0.03, tex=tex),
+            cfg=_visual(), color=color, label="grass_terrain",
+        )
 
 
-def add_treeline(builder, look, bounds, rng, inner=35.0, outer=70.0, count=140):
+def add_treeline(builder, look, bounds, rng, inner=35.0, outer=70.0, count=140, terrain=None):
     """A ring of big crowns around the lot so the horizon reads as woods, not the edge of the world."""
     x0, y0, x1, y1 = bounds
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -329,62 +352,72 @@ def add_treeline(builder, look, bounds, rng, inner=35.0, outer=70.0, count=140):
         x, y = cx + (rx + d) * math.cos(a), cy + (ry + d) * math.sin(a)
         height = rng.uniform(14.0, 22.0)
         trunk = meshes.tapered_cylinder(0.35, 0.18, height * 0.7, segments=8, tile=(0.8, 1.5), tex=tex)
-        builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, 0.0)), mesh=trunk, cfg=_visual(),
+        gz = ground_under(terrain, x, y)
+        builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, gz)), mesh=trunk, cfg=_visual(),
                                color=tuple(0.8 * c for c in color), label=f"edge{i}_bark")
         crown = meshes.canopy(rng.uniform(5.5, 8.5), np.random.default_rng(rng.randrange(1 << 30)), lobes=6,
                               tex=look.leaves)
         tint = (rng.uniform(0.75, 1.0), rng.uniform(0.8, 1.05), rng.uniform(0.65, 0.95))
-        builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, height * 0.65)), mesh=crown, cfg=_visual(),
+        builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, gz + height * 0.65)), mesh=crown, cfg=_visual(),
                                color=tint, label=f"edge{i}_crown")
 
 
-def add_pavement(builder, look, pts, width, kind, z, label, tile=3.0):
+def add_pavement(builder, look, pts, width, kind, z, label, tile=3.0, terrain=None):
     tex, color = look.surface(kind)
-    builder.add_shape_mesh(-1, mesh=meshes.ribbon(pts, width, tile, z=z, tex=tex), cfg=_visual(), color=color,
-                           label=label)
+    # On terrain, ride 1 cm above the surface so the draped grass never shows through.
+    mesh = meshes.ribbon(pts, width, tile, z=z if terrain is None else z + 0.01, tex=tex,
+                         height_fn=None if terrain is None else terrain.height)
+    builder.add_shape_mesh(-1, mesh=mesh, cfg=_visual(), color=color, label=label)
 
 
-def add_tree(builder, look, x, y, rng, label):
+def add_tree(builder, look, x, y, rng, label, terrain=None):
     height = rng.uniform(11.0, 20.0)
     r = rng.uniform(0.16, 0.38)
+    gz = ground_under(terrain, x, y)
     # Physics: a plain cylinder. Visual: tapered bark trunk and a clumpy crown up high.
     builder.add_shape_cylinder(
-        -1, xform=wp.transform(p=wp.vec3(x, y, 1.5)), radius=r, half_height=1.5,
+        -1, xform=wp.transform(p=wp.vec3(x, y, gz + 1.5)), radius=r, half_height=1.5,
         cfg=newton.ModelBuilder.ShapeConfig(mu=0.8, gap=0.01, is_visible=False), label=f"{label}_trunk",
     )
     tex, color = look.surface("bark")
     trunk = meshes.tapered_cylinder(r, r * 0.5, height * 0.75, segments=12, tile=(0.6, 1.2), tex=tex,
                                     jitter=0.06, rng=rng)
-    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, 0.0)), mesh=trunk, cfg=_visual(),
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, gz)), mesh=trunk, cfg=_visual(),
                            color=tuple(c * rng.uniform(0.75, 1.0) for c in color), label=f"{label}_bark")
     crown = meshes.canopy(rng.uniform(3.5, 5.5), np.random.default_rng(rng.randrange(1 << 30)), lobes=7,
                           tex=look.leaves)
     tint = (rng.uniform(0.8, 1.05), rng.uniform(0.85, 1.1), rng.uniform(0.7, 1.0))
-    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, height * 0.68)), mesh=crown, cfg=_visual(),
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(x, y, gz + height * 0.68)), mesh=crown, cfg=_visual(),
                            color=tint, label=f"{label}_crown")
 
 
-def add_house(builder, look, cx, cy, length, width, rot, wall_h, label, garage=False):
+def add_house(builder, look, cx, cy, length, width, rot, wall_h, label, garage=False, terrain=None):
     """Box house with siding, a gable roof, windows, and optionally two garage doors on the +X end."""
     q = _quat_z(rot)
+    gz = 0.0
+    if terrain is not None:
+        c, s = math.cos(rot), math.sin(rot)
+        lx = np.array([1, 1, -1, -1, 0]) * length / 2
+        ly = np.array([1, -1, 1, -1, 0]) * width / 2
+        gz = float(np.min(terrain.height(cx + c * lx - s * ly, cy + s * lx + c * ly)))
     # Physics: one box.
     builder.add_shape_box(
-        -1, xform=wp.transform(p=wp.vec3(cx, cy, wall_h / 2), q=q), hx=length / 2, hy=width / 2, hz=wall_h / 2,
+        -1, xform=wp.transform(p=wp.vec3(cx, cy, gz + wall_h / 2), q=q), hx=length / 2, hy=width / 2, hz=wall_h / 2,
         cfg=newton.ModelBuilder.ShapeConfig(gap=0.01, is_visible=False), label=label,
     )
     walls = meshes.loft([(0.0, meshes._rounded_rect(length / 2, width / 2, 0.01, n=1)),
                          (wall_h, meshes._rounded_rect(length / 2, width / 2, 0.01, n=1))], tile=2.0, cap_bottom=False)
     walls.texture = look.siding
-    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(cx, cy, 0.0), q=q), mesh=walls, cfg=_visual(),
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(cx, cy, gz), q=q), mesh=walls, cfg=_visual(),
                            color=(0.86, 0.84, 0.78), label=f"{label}_walls")
     roof = meshes.gable_roof(length, width, rise=width * 0.3)
     roof.texture = look.shingles
-    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(cx, cy, wall_h), q=q), mesh=roof, cfg=_visual(),
+    builder.add_shape_mesh(-1, xform=wp.transform(p=wp.vec3(cx, cy, gz + wall_h), q=q), mesh=roof, cfg=_visual(),
                            color=(0.30, 0.29, 0.30), label=f"{label}_roof")
 
     def on_wall(lx, ly, lz):
         c, s = math.cos(rot), math.sin(rot)
-        return wp.vec3(cx + c * lx - s * ly, cy + s * lx + c * ly, lz)
+        return wp.vec3(cx + c * lx - s * ly, cy + s * lx + c * ly, gz + lz)
 
     win = (0.12, 0.15, 0.18)
     trim = (0.95, 0.95, 0.93)
@@ -436,25 +469,25 @@ def build_flat(builder, rng, look):
     )
 
 
-def build_anna_pl(builder, rng, look):
+def build_anna_pl(builder, rng, look, terrain=None, name="anna_pl"):
     route = site.route_m()
     xs = [p[0] for p in route]
     ys = [p[1] for p in route]
     bounds = (min(xs) - 15, min(ys) - 10, max(xs) + 15, max(ys) + 10)
-    add_ground(builder, look, bounds)
+    add_ground(builder, look, bounds, terrain=terrain)
 
     paved = []
     for i, road in enumerate(site.PAVEMENT):
         pts = [site.px_to_m(p) for p in road["px"]]
         paved.append((pts, road["width"]))
         add_pavement(builder, look, pts, road["width"], road["surface"], 0.004 + 0.001 * i, f"road{i}",
-                     tile=2.5 if road["surface"] == "concrete" else 4.0)
+                     tile=2.5 if road["surface"] == "concrete" else 4.0, terrain=terrain)
 
     for i, h in enumerate(site.HOUSES):
         cx, cy = site.px_to_m(h["center"])
         w, d = (s * site.M_PER_PX for s in h["size"])
         add_house(builder, look, cx, cy, d, w, math.radians(90 - h["rot"]), h["height"] - 2.5, f"house{i}",
-                  garage=h.get("garage", False))
+                  garage=h.get("garage", False), terrain=terrain)
 
     n = 0
     for (cpx, r_px) in site.TREE_CLUSTERS:
@@ -465,16 +498,21 @@ def build_anna_pl(builder, rng, look):
             p = (c[0] + d * math.cos(a), c[1] + d * math.sin(a))
             if any(_dist_to_polyline(p, pts) < w / 2 + 1.5 for pts, w in paved):
                 continue
-            add_tree(builder, look, p[0], p[1], rng, f"tree{n}")
+            add_tree(builder, look, p[0], p[1], rng, f"tree{n}", terrain=terrain)
             n += 1
 
-    add_treeline(builder, look, bounds, rng)
+    add_treeline(builder, look, bounds, rng, terrain=terrain)
     bins = [(bx, by, math.radians(site.BIN_YAW_DEG), kind) for (bx, by), kind in zip(site.bins_m(), site.BIN_KINDS)]
-    return SceneSpec(name="anna_pl", start=site.start_pose(), bins=bins, route=route, bounds=bounds,
-                     directions=site.DIRECTIONS)
+    return SceneSpec(name=name, start=site.start_pose(), bins=bins, route=route, bounds=bounds,
+                     directions=site.DIRECTIONS, terrain=terrain)
 
 
-SCENES = {"flat": build_flat, "anna_pl": build_anna_pl}
+def build_anna_pl_scan(builder, rng, look):
+    """Anna Pl on the ground from the phone LiDAR scan (terrain/anna_pl.npz, made by tools/import_scan.py)."""
+    return build_anna_pl(builder, rng, look, terrain=Terrain.load("anna_pl"), name="anna_pl_scan")
+
+
+SCENES = {"flat": build_flat, "anna_pl": build_anna_pl, "anna_pl_scan": build_anna_pl_scan}
 
 
 # ---------------------------------------------------------------------------
@@ -529,10 +567,13 @@ class Sim:
         self.spec = SCENES[scene](builder, rng, look)
 
         sx, sy, syaw = self.spec.start
-        self.car, self.car_joint, self.drive_joints = add_car(builder, sx, sy, syaw)
+        terrain = self.spec.terrain
+        self.car, self.car_joint, self.drive_joints = add_car(
+            builder, sx, sy, syaw, z0=ground_under(terrain, sx, sy, syaw, CAR_FOOTPRINT))
         self.bins = []
         for i, (bx, by, byaw, kind) in enumerate(self.spec.bins):
-            body, joint = add_bin(builder, bx, by, byaw, kind, f"bin{i}", look)
+            body, joint = add_bin(builder, bx, by, byaw, kind, f"bin{i}", look,
+                                  z0=ground_under(terrain, bx, by, byaw, bin_half(kind)[:2]))
             self.bins.append({"body": body, "joint": joint, "kind": kind, "latch": latch_local(kind)})
 
         self.model = builder.finalize()
@@ -642,7 +683,7 @@ class Sim:
         """Teleport the car (at rest) for tools and tests. Not exposed over HTTP."""
         q = self.state_0.joint_q.numpy()
         q0 = self.car_q0
-        q[q0:q0 + 3] = (x, y, CHASSIS_Z0)
+        q[q0:q0 + 3] = (x, y, ground_under(self.spec.terrain, x, y, yaw, CAR_FOOTPRINT) + CHASSIS_Z0)
         q[q0 + 3:q0 + 7] = (0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))
         qd = np.zeros(self.model.joint_dof_count, dtype=np.float32)
         for st in (self.state_0, self.state_1):
@@ -683,7 +724,8 @@ class Sim:
             sx += rng.uniform(-0.5, 0.5)
             sy += rng.uniform(-0.5, 0.5)
             syaw += math.radians(rng.uniform(-15, 15))
-        place(self.car_q0, sx, sy, CHASSIS_Z0, syaw)
+        terrain = self.spec.terrain
+        place(self.car_q0, sx, sy, ground_under(terrain, sx, sy, syaw, CAR_FOOTPRINT) + CHASSIS_Z0, syaw)
         self.start_pose = (sx, sy, syaw)
         self.episode = []
         self._compass_rng = random.Random(self.seed * 7919 + 17)
@@ -693,7 +735,8 @@ class Sim:
                 bx += rng.uniform(-0.25, 0.25)
                 by += rng.uniform(-0.15, 0.15)
                 byaw += math.radians(rng.uniform(-20, 20))
-            place(b["q0"], bx, by, bin_half(kind)[2] + 0.002, byaw)
+            place(b["q0"], bx, by, ground_under(terrain, bx, by, byaw, bin_half(kind)[:2]) + bin_half(kind)[2] + 0.002,
+                  byaw)
 
         qd = np.zeros(self.model.joint_dof_count, dtype=np.float32)
         for st in (self.state_0, self.state_1):
@@ -821,7 +864,8 @@ class Sim:
             x0, y0, x1, y1 = self.spec.bounds
             span = max(x1 - x0, y1 - y0)
             height = span / 2 / math.tan(math.radians(CAMERAS["overhead"][2]) / 2) + 2
-            eye = np.array([(x0 + x1) / 2, (y0 + y1) / 2, height])
+            top = 0.0 if self.spec.terrain is None else float(self.spec.terrain.z.max())
+            eye = np.array([(x0 + x1) / 2, (y0 + y1) / 2, top + height])
             target = eye - np.array([0.0, 0.0, 1.0])
         return eye, look_at_quat(eye, target)
 

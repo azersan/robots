@@ -1,6 +1,6 @@
 """Quick end-to-end check without the gateway: build, drive, latch, render.
 
-    python tools/smoke.py [--scene flat|anna_pl] [--out /tmp/simpg]
+    python tools/smoke.py [--scene flat|anna_pl|anna_pl_scan] [--out /tmp/simpg]
 """
 
 import argparse

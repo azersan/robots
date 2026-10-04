@@ -37,6 +37,14 @@ commands on the same port. A watchdog stops the motors if commands stop.
 with a browser viewer. It has the same kind of robot task: drive down the driveway, find the bins, latch on.
 See `sim-playground/README.md` for setup, and `sim-playground/AGENTS.md` for the API if you need to drive the sim.
 
+## Scan-to-Sim
+
+`scan-to-sim/` turns an iPhone LiDAR scan of the real driveway into sim ground:
+`scan-to-sim/ios/` is the ScanToSim iPhone app (XcodeGen project), `scan-to-sim/scan2sim/` is the Python
+compiler (heightfield, drift report, USD/MJCF), and `sim-playground/tools/import_scan.py` turns its output into
+`sim-playground/terrain/anna_pl.npz` for the `anna_pl_scan` scene. Workflow and scanning tips:
+`scan-to-sim/README.md`.
+
 ## Key Files
 
 **Pi 5-side (`raspi-camera/pi-5/`, deploy to Pi home dir via SSH):**

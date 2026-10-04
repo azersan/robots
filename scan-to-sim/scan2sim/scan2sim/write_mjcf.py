@@ -22,10 +22,19 @@ def write_hfield_bin(path: Path, hf: Heightfield):
         hf.z.astype("<f4").tofile(out)
 
 
+def write_mask_bin(path: Path, hf: Heightfield):
+    """Which heightfield cells were scanned (1) vs filled from neighbors (0): int32 nrow, int32 ncol, uint8 data."""
+    ny, nx = hf.z.shape
+    with open(path, "wb") as out:
+        np.array([ny, nx], dtype="<i4").tofile(out)
+        hf.measured.astype(np.uint8).tofile(out)
+
+
 def write(sim_dir: Path, hf: Heightfield, ground_visual, background, objects: list[dict], friction: float = 0.8) -> Path:
     meshes = sim_dir / "meshes"
     meshes.mkdir(exist_ok=True)
     write_hfield_bin(sim_dir / "ground.hfield.bin", hf)
+    write_mask_bin(sim_dir / "ground.mask.bin", hf)
 
     ny, nx = hf.z.shape
     zmin, zmax = float(hf.z.min()), float(hf.z.max())
