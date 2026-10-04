@@ -81,9 +81,10 @@ def main():
     ap.add_argument("--last", type=int, default=10)
     args = ap.parse_args()
     d = httpx.get(f"{args.url}/api/episodes", timeout=30).json()
-    eps = [e for e in d["archived"] if e["scene"] == "anna_pl"][-args.last:]
+    # Both anna_pl scenes share the traced layout; the scanned one just has real ground under it.
+    eps = [e for e in d["archived"] if e["scene"] in ("anna_pl", "anna_pl_scan")][-args.last:]
     for ep in eps:
-        print(score(ep))
+        print(ep["scene"], score(ep))
 
 
 if __name__ == "__main__":

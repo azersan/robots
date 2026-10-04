@@ -224,9 +224,9 @@ class Bot:
         self.s = self._req("GET", "/sensors").json()
         return self.s
 
-    def reset(self, seed):
+    def reset(self, seed, scene="anna_pl"):
         self._req("POST", "/run", json={"running": False})
-        self.s = self._req("POST", "/reset", json={"scene": "anna_pl", "randomize": True, "seed": seed}).json()
+        self.s = self._req("POST", "/reset", json={"scene": scene, "randomize": True, "seed": seed}).json()
         self.x = self.y = 0.0
         return self.s
 
@@ -769,6 +769,7 @@ def tow_home(bot, log, speed=0.5, look=2.0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--scene", default="anna_pl", help="anna_pl, or anna_pl_scan for the scanned ground")
     ap.add_argument("--resume", action="store_true", help="dev: continue from tmp/robot/run/state.json")
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--stop-after", default=None, help="follow|stage|latch")
@@ -798,7 +799,7 @@ def main():
         log("resumed after %s at t=%.1f" % (st["phase"], bot.s["time"]))
         done = st["phase"]
     else:
-        bot.reset(a.seed if a.seed is not None else 0)
+        bot.reset(a.seed if a.seed is not None else 0, a.scene)
         bot.stop()
         bot.save("start")
         log("start: heading %.1f" % bot.hd)
