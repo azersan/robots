@@ -3,7 +3,8 @@
 Humans open http://localhost:8770/ for the live annotated view + buttons.
 Claude (or any script) uses the same endpoints:
 
-  GET  /frame.jpg[?raw=1]           latest frame (annotated unless raw=1)
+  GET  /frame.jpg[?raw=1][&after=N] latest frame (annotated unless raw=1); after=N
+                                    waits for a frame newer than N (X-Frame header)
   GET  /state                       JSON: bolt detection, connection, camera ptz
   GET  /stream.mjpg                 annotated MJPEG stream
   POST /ptz?tilt=-5&pan=3&zoom=..   relative camera move (tilt_abs= etc. absolute)
@@ -20,6 +21,7 @@ exactly when the LEDs are on is the robot (see detect()).
 import argparse
 import json
 import queue
+import socket
 import threading
 import time
 import traceback
@@ -263,7 +265,7 @@ PAGE = """<!doctype html><title>BOLT+ eyes</title>
 <style>body{background:#111;color:#ddd;font:14px system-ui;margin:12px}
 img{max-width:100%;border:1px solid #444}button{font:14px system-ui;padding:6px 12px;margin:2px}
 #s{font:12px monospace;white-space:pre}</style>
-<img src="/stream.mjpg"><div>
+<img id="v"><div>
 <b>Drive</b> <button onclick="p('/bolt/turn?deg=-30')">&#8630; -30</button>
 <button onclick="p('/bolt/roll?speed=50&dur=0.6')">&#8593; fwd</button>
 <button onclick="p('/bolt/roll?speed=-50&dur=0.6')">&#8595; back</button>
@@ -276,6 +278,16 @@ img{max-width:100%;border:1px solid #444}button{font:14px system-ui;padding:6px 
 <button onclick="p('/ptz?pan=-5')">pan left</button><button onclick="p('/ptz?pan=5')">pan right</button>
 </div><div id="s"></div>
 <script>function p(u){fetch(u,{method:'POST'})}
+// Pull frames one at a time instead of <img src=stream.mjpg>: Chromium's
+// MJPEG handling goes black on a hiccup and never retries; this self-paces
+// and recovers on its own.
+(async()=>{const v=document.getElementById('v');let prev=null,n=0;
+ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ for(;;){try{const ac=new AbortController(),t=setTimeout(()=>ac.abort(),3000);
+  const r=await fetch('/frame.jpg?after='+n,{cache:'no-store',signal:ac.signal});clearTimeout(t);
+  if(!r.ok)throw r.status;n=+r.headers.get('X-Frame')||0;const u=URL.createObjectURL(await r.blob());
+  await new Promise(res=>{v.onload=v.onerror=res;v.src=u});
+  if(prev)URL.revokeObjectURL(prev);prev=u;}catch(e){await sleep(500)}}})();
 setInterval(async()=>{document.getElementById('s').textContent=
 JSON.stringify(await (await fetch('/state')).json(),null,1)},1000)</script>"""
 
@@ -285,7 +297,7 @@ def make_handler(cam, bolt, eyes):
         def log_message(self, *a):
             pass
 
-        def _send(self, code, body, ctype="application/json"):
+        def _send(self, code, body, ctype="application/json", headers=None):
             if isinstance(body, (dict, list)):
                 body = json.dumps(body).encode()
             elif isinstance(body, str):
@@ -294,6 +306,8 @@ def make_handler(cam, bolt, eyes):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
 
@@ -305,9 +319,16 @@ def make_handler(cam, bolt, eyes):
             if u.path == "/state":
                 return self._send(200, eyes.state())
             if u.path == "/frame.jpg":
+                # ?after=N waits (up to 1s) for a frame newer than N, so a
+                # polling client runs at camera rate instead of spinning.
+                deadline = time.time() + 1.0
+                while "after" in q and eyes.view_n <= int(q["after"]) and time.time() < deadline:
+                    time.sleep(0.005)
                 with eyes.lock:
-                    jpg = eyes.raw_jpg if q.get("raw") else eyes.view_jpg
-                return self._send(200, jpg, "image/jpeg") if jpg else self._send(503, {"error": "no frame"})
+                    n, jpg = eyes.view_n, eyes.raw_jpg if q.get("raw") else eyes.view_jpg
+                if not jpg:
+                    return self._send(503, {"error": "no frame"})
+                return self._send(200, jpg, "image/jpeg", {"X-Frame": str(n)})
             if u.path == "/stream.mjpg":
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=f")
@@ -373,9 +394,13 @@ def main():
     bolt.start()
     eyes = Eyes(cam, bolt)
     eyes.start()
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(cam, bolt, eyes))
+    handler = make_handler(cam, bolt, eyes)
+    # Listen on IPv6 loopback too: on Windows "localhost" tries ::1 first and
+    # an IPv4-only server costs ~200ms per request in fallback.
+    srv6 = type("V6Server", (ThreadingHTTPServer,), {"address_family": socket.AF_INET6})
+    threading.Thread(target=srv6(("::1", args.port), handler).serve_forever, daemon=True).start()
     log(f"eyes server on http://localhost:{args.port}/")
-    srv.serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", args.port), handler).serve_forever()
 
 
 if __name__ == "__main__":
