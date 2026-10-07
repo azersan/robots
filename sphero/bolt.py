@@ -6,6 +6,7 @@ timeout, which on Windows also has to cover finding the device - too short
 at a weak signal - so this adapter scans first and retries.
 """
 import asyncio
+import os
 import threading
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from spherov2.toy.bolt import BOLT
 
 ADDRESS = "F8:30:BC:57:6E:94"
 NAME = "BP-6E94"
+DEBUG = bool(os.environ.get("BOLT_DEBUG"))  # log raw BLE tx/rx
 
 
 class RobustBleakAdapter:
@@ -59,9 +61,17 @@ class RobustBleakAdapter:
         self._loop.close()
 
     def set_callback(self, uuid, cb):
+        if DEBUG:
+            inner = cb
+
+            def cb(sender, data):
+                print(f"  rx {bytes(data).hex(' ')}")
+                inner(sender, data)
         self._execute(self._client.start_notify(uuid, cb))
 
     def write(self, uuid, data):
+        if DEBUG:
+            print(f"  tx {uuid[:8]} {bytes(data).hex(' ')}")
         self._execute(self._client.write_gatt_char(uuid, data, True))
 
 
@@ -69,6 +79,13 @@ class BoltPlus(BOLT):
     # The BOLT+ only exposes service 00010001 (API v2 on 00010002); the old
     # 'usetheforce...band' anti-DoS characteristic 00020005 is gone.
     _handshake = []
+
+    def _execute(self, packet):
+        # BOLT commands go to the secondary processor (0x12), which the BOLT+
+        # rejects with bad_target_id (0x09); it answers them on 0x11.
+        if packet.tid == 0x12:
+            packet = packet._replace(tid=0x11)
+        return super()._execute(packet)
 
 
 def make_bolt(address=ADDRESS, name=NAME):
