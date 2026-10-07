@@ -29,7 +29,7 @@ class RobustBleakAdapter:
         self._thread.start()
         self._client = None
         try:
-            self._execute(self._connect(address))
+            self._execute(self._connect(address), timeout=None)
         except BaseException:
             self.close(False)
             raise
@@ -49,9 +49,10 @@ class RobustBleakAdapter:
                 print(f"  connect attempt {i}/{self.attempts} failed: {e!r}")
         raise last
 
-    def _execute(self, coroutine):
+    def _execute(self, coroutine, timeout=5.0):
+        # A stalled WinRT call must surface as an error, not hang every thread.
         with self._lock:
-            return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result()
+            return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result(timeout)
 
     def close(self, disconnect=True):
         if disconnect and self._client is not None:
@@ -72,7 +73,9 @@ class RobustBleakAdapter:
     def write(self, uuid, data):
         if DEBUG:
             print(f"  tx {uuid[:8]} {bytes(data).hex(' ')}")
-        self._execute(self._client.write_gatt_char(uuid, data, True))
+        # Without response: write-with-response intermittently never completes
+        # on Windows while the robot is streaming sensor notifications.
+        self._execute(self._client.write_gatt_char(uuid, data, False))
 
 
 class BoltPlus(BOLT):
