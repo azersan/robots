@@ -27,6 +27,16 @@ def post(path):
     urllib.request.urlopen(urllib.request.Request(BASE + path, method="POST"), timeout=2).read()
 
 
+# The camera sees the floor at a slant, so depth (image y) is foreshortened
+# relative to sideways motion. Angles are computed with y stretched by this
+# factor, which makes heading->image offset roughly direction-independent.
+Y_STRETCH = 2.0
+
+
+def floor_angle(dx, dy):
+    return math.degrees(math.atan2(dy * Y_STRETCH, dx)) % 360
+
+
 def wrap(a):
     return (a + 180) % 360 - 180
 
@@ -40,11 +50,35 @@ def fix():
     return b["x"], b["y"], s["t"] - b["age_s"]
 
 
+def calibrate(speed=30, secs=1.0):
+    """Roll briefly at heading 0 and return the observed offset (deg), or None.
+
+    The heading frame resets on every reconnect, so measure it each run."""
+    f0 = fix()
+    if f0 is None:
+        return None
+    post("/bolt/heading?deg=0")
+    time.sleep(0.8)
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        post(f"/bolt/drive?heading=0&speed={speed}&dur=0.4")
+        time.sleep(0.2)
+    post("/bolt/stop")
+    time.sleep(1.0)  # coast + let the tracker catch up
+    f1 = fix()
+    if f1 is None:
+        return None
+    dx, dy = f1[0] - f0[0], f1[1] - f0[1]
+    moved = math.hypot(dx, dy)
+    print(f"calibration: moved {moved:.0f}px from {f0[:2]} to {f1[:2]}")
+    return floor_angle(dx, dy) if moved > 8 else None
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("waypoints", nargs="+", help="x,y in full-frame pixels")
-    p.add_argument("--offset", type=float, default=40.0,
-                   help="initial guess: image angle = heading + offset (deg)")
+    p.add_argument("--offset", type=float, default=None,
+                   help="image angle = heading + offset (deg); measured if omitted")
     p.add_argument("--tol", type=float, default=15.0, help="arrival radius, px")
     # Sustained, the BOLT+ is fast: speed 75 crosses the frame in ~2s and
     # outruns the blink tracker. Keep it slow.
@@ -54,6 +88,13 @@ def main():
     args = p.parse_args()
     wps = [tuple(map(float, w.split(","))) for w in args.waypoints]
     offset = args.offset
+    for secs in (1.0, 1.6):
+        if offset is not None:
+            break
+        offset = calibrate(secs=secs)
+    if offset is None:
+        raise SystemExit("couldn't measure heading offset (robot not moving / not tracked)")
+    print(f"offset {offset:.0f}")
     hist = deque(maxlen=20)   # (t_fix, x, y, heading commanded at that time)
     heading = None
 
@@ -85,14 +126,16 @@ def main():
                     break
                 # Learn the heading->image mapping from the last ~0.7s of motion,
                 # if we were commanding one heading the whole time.
-                old = [h for h in hist if tf - 0.9 < h[0] <= tf - 0.5]
+                old = [h for h in hist if tf - 1.0 < h[0] <= tf - 0.6]
                 if old and heading is not None:
                     t0, x0, y0, h0 = old[0]
                     moved = math.hypot(x - x0, y - y0)
-                    if moved > 10 and h0 is not None and abs(wrap(h0 - heading)) < 15:
-                        seen = math.degrees(math.atan2(y - y0, x - x0))
-                        offset = (offset + 0.3 * wrap(seen - heading - offset)) % 360
-                want = math.degrees(math.atan2(ty - y, tx - x))
+                    steady = all(h[3] is not None and abs(wrap(h[3] - heading)) < 12
+                                 for h in hist if h[0] >= t0)
+                    if moved > 12 and steady:
+                        seen = floor_angle(x - x0, y - y0)
+                        offset = (offset + 0.2 * wrap(seen - heading - offset)) % 360
+                want = floor_angle(tx - x, ty - y)
                 heading = round((want - offset) % 360)
                 speed = round(min(args.vmax, max(args.vmin, args.vmin + 0.1 * (dist - 30))))
                 post(f"/bolt/drive?heading={heading}&speed={speed}&dur=0.5")
