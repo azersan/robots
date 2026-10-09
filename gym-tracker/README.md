@@ -4,6 +4,9 @@ Watches the camera, notices when someone starts lifting, counts reps and sets,
 and reads the weight off the plates. Each finished set is logged locally and,
 optionally, appended to the workout-log Google Sheet.
 
+Status, design decisions, test results and next steps: [`PLAN.md`](PLAN.md).
+Pi setup and rebuild: [`../raspi-camera/pi-5/SETUP.md`](../raspi-camera/pi-5/SETUP.md).
+
 ## How it works
 
 1. **Idle:** every `--idle-interval` seconds (default 2), run pose detection on

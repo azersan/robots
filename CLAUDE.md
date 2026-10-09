@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Autonomous robot project converting a battle bot into a vision-based autonomous robot. Uses a Raspberry Pi 5 with camera module, with heavy CV processing offloaded to a laptop.
 
+> **Pi 5 setup / rebuild runbook:** `raspi-camera/pi-5/SETUP.md` (reflashed 2026-10-08: Debian 13, passwordless
+> sudo, code in `~/robot/`, camera stream at boot as the `robot-stream` service, motors not in use).
+>
 > **Hardware note:** The robot is now a **Raspberry Pi 5** (`pibot5-2g.local`), not the original Pi Zero W. The Pi 5 uses the `lgpio` library (not `pigpio`) and the scripts in `raspi-camera/pi-5/`. The `raspi-camera/pi-zero/` scripts are legacy. Some sections below may still reference Pi Zero details — see the Pi 5 files as the source of truth.
 
 ## Architecture
@@ -50,7 +53,8 @@ compiler (heightfield, drift report, USD/MJCF), and `sim-playground/tools/import
 `gym-tracker/` counts reps and sets from the camera and reads the weight off the plates (MediaPipe Pose for
 reps, Claude vision for the plates and the exact lift name), logging to JSONL and optionally Tony's workout-log
 Google Sheet. Runs on the Mac against the Pi stream for now; it's meant to move onto the Pi (`-s picamera`).
-Own venv (`gym-tracker/.venv`). See `gym-tracker/README.md`.
+Own venv (`gym-tracker/.venv`). See `gym-tracker/README.md`; status, decisions and next steps are in
+`gym-tracker/PLAN.md`.
 
 ## Key Files
 

@@ -1,0 +1,75 @@
+# Gym tracker: status and plan
+
+`README.md` covers how it works and how to run it. This file covers where things
+stand, why it's built this way, and what comes next. Started 2026-10-08.
+
+## Goal
+
+The Pi 5 camera watches the lifting area. When someone shows up, it tracks them:
+which exercise (overhead press, squat, deadlift, ...), reps, sets, and the weight
+from the plates. Each session ends up in the workout-log Google Sheet without
+typing anything.
+
+Motors are out of scope. The Pi is just a camera here.
+
+## Decisions
+
+| Decision | Why |
+|---|---|
+| **Debug on the Mac first, run on the Pi eventually** | Faster iteration with a preview window and the full pose model. The code avoids anything Mac-specific so it can move over (`-s picamera`, `lite` model on ARM, `--headless`). |
+| **Pose (MediaPipe) counts reps; Claude names the lift and reads the plates** | Counting reps is a geometry problem that has to run on every frame, locally. The exact lift name (Back vs Front Squat, Strict vs Push Press) and the plate count need judgment and vision, once per set. Pose only decides the movement *family*. Claude gets the frames plus the rep measurements and decides the rest, including leaving the weight blank when it can't read the plates. |
+| **Claude via the `claude` CLI, not the API SDK** | Tony's call (2026-10-08). It uses the machine's Claude login, with no API key to manage. The call switches off tools, MCP servers, skills and settings and runs from an empty folder, which took it from about $0.80 to $0.05 of plan usage per set. The cost: the SDK's automatic retry on another model when Claude declines isn't available, so a declined set is just logged without a weight. |
+| **Log locally always; the sheet is opt-in (`--sheet`)** | Until the counting is trusted on the real camera, it shouldn't write unattended to the real log. The JSONL log keeps every rep's measurements for tuning. |
+| **Row format matches the hand-kept log** | Exercise names follow the sheet's existing ones. Back-to-back identical sets collapse to one row (3 × 5 → Reps 5, Sets 3). Sets is blank for a single set. |
+| **Sets under 2 reps are dropped** | Bending to load a plate looks like a single deadlift. |
+| **Stream at 1280×720** | 640×480 is too small to read plate markings. |
+
+## What's been verified
+
+- **Unit tests:** 8 pass. They use synthetic movement data for each lift, check
+  that squat/deadlift/press/curl don't trigger each other, and cover partial
+  reps, rest splitting sets, and signal dropouts.
+- **Public videos** (Wikimedia Commons):
+  - Squat demo: 2 reps, correct.
+  - Machine shoulder press: 3 reps, correct. Claude named it "Machine Shoulder
+    Press" and left the weight blank because it couldn't read the pin.
+  - Army trap-bar deadlift: first counted nothing, because a knee-angle rule
+    rejected trap-bar pulls. Fixed. Now 2 of 3 reps in the one continuous shot;
+    the video cuts before the bar is set down, which the deadlift rule expects.
+  - YouTube-style curl video: only the wide shots count. Close-up crops give
+    junk, including one false "press". A fixed camera doesn't have this problem.
+- **Plate reading:**
+  - Meet deadlift photo captioned 260 kg: read as 255 kg / 562 lb. It counted
+    the plates by their markings and noted small change plates might be hidden.
+  - Front-on squat photo: correctly declined to guess (plates edge-on).
+- **End to end** with the CLI and no API key: video → reps → set → Claude →
+  JSONL + frames → session summary.
+- **Live Pi stream:** the tracker reads it at about 30 fps. Not tested with a
+  person yet; the room was dark.
+
+## Next steps
+
+1. **First real session.** Mount the camera side-on to the lifting spot (facing
+   the plate faces, whole body in frame, decent light) and run on the Mac with
+   the preview window and without `--sheet`.
+   Compare the summary with what was actually done.
+2. **Tune** the thresholds and gates in `reps.py` (`make_counters()`) using the
+   per-rep `rep_stats` in `logs/*.jsonl`. Turn on `--sheet` once the counts are
+   right.
+3. **Move it onto the Pi:**
+   - Check that `mediapipe==0.10.31` installs on Debian 13 / Python 3.13 aarch64
+     (unverified; the main risk). If it doesn't, try another mediapipe version,
+     or keep pose on the Mac or the NZXT against the stream.
+   - Install Claude Code on the Pi and log in (or run `--no-weigh`).
+   - Run with `-s picamera --headless` after stopping `robot-stream`, or keep
+     the stream service and read `-s localhost`.
+   - Add a systemd unit for the tracker, like `robot-stream.service`.
+4. **More movements** as needed: bench press (needs a different camera view),
+   rows, lunges, cleans and jerks.
+
+## Open questions
+
+- Where exactly the camera goes in the gym, and whether the plates are
+  color-coded bumpers (easiest to read) or iron.
+- Whether the tracker should notify Tony (e.g. via the Telegram bot) when it logs
+  a session, so he can correct a bad read.
