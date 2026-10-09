@@ -49,6 +49,16 @@ Motors are out of scope. The Pi is just a camera here.
 - **Live Pi stream:** the tracker reads it at about 30 fps. Not tested with a
   person yet; the room was dark.
 
+## First live session (2026-10-09, garage, strict press)
+
+| Try | Reps (actual → counted) | Weight (actual → read) | What changed after |
+|---|---|---|---|
+| 1 | 5 → 0 | 65 → – | Press lockout gate 145° → 120° (fixed camera angle) |
+| 2 | 5 → 4 | 65 → ? | A stray "squat" made the first press look like a misread; frames sent were mid-rep and blurred |
+| 3 | 0 → 2 (clearing weights) | – | Claude rejected it once given a `real_set` field |
+| 4 | 5 → 5 | 70 → 65 (high) | Change plate taken for a bumper hub → plate inventory in the prompt, 4 at-rest frames |
+| 5 | 5 → 5 | 72.5 → 72.5 (medium) | Correct, including the white 1.25 |
+
 ## Next steps
 
 0. **Camera placement is fixed** (Tony, 2026-10-09: no flexibility on where it
