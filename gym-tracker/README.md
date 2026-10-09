@@ -33,13 +33,15 @@ Pi setup and rebuild: [`../raspi-camera/pi-5/SETUP.md`](../raspi-camera/pi-5/SET
 
 ## Garage display
 
-`display.py` posts to the Ulanzi LED clock in the garage (`http://192.168.4.37`,
-custom app `garage`, a 52×16 text area). While a set is going it shows the live
-count (`SQUAT 3`); when the set ends it shows `5 REPS`; once Claude has read the
-plates it shows `5 X 185 LB`, green if confident, yellow otherwise (`5 X ? LB`
-if the weight couldn't be read). Posts run on a background thread with a 2 s
-timeout, so an unplugged clock never stalls tracking. `--display-url` points it
-elsewhere; `--no-display` turns it off.
+`display.py` posts to the Ulanzi TC002 LED clock in the garage
+(`http://192.168.4.37`, custom app `garage`, 52×16 pixels, stock firmware).
+While a set is going it shows the live count (`SQUAT 3`, `DL 5`); when the set
+ends, `5 REPS`; once Claude has read the plates, `5 X 185` (pounds), green if
+confident, yellow otherwise, or a yellow `5 REPS` if the weight couldn't be
+read. The stock font fits about 8 characters and has no `?`, so messages stay
+short. Posts run on a background thread with a 2 s timeout, so an unplugged
+clock never stalls tracking. `--display-url` points it elsewhere;
+`--no-display` turns it off.
 
 ## Setup (Mac)
 

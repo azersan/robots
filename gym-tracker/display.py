@@ -13,7 +13,10 @@ DEFAULT_URL = "http://192.168.4.37/api/custom?name=garage"
 
 WHITE, GREEN, YELLOW = "#FFFFFF", "#00FF00", "#FFD000"
 
-SHORT_NAMES = {"squat": "SQUAT", "hinge": "DEADLIFT", "press": "PRESS", "curl": "CURL"}
+# The stock TC002 firmware fits about 8 characters at fontHeight 10 and its
+# font has no "?", so every message stays <= 8 characters of plain A-Z/0-9.
+# Weights are always pounds, so "LB" is left off.
+SHORT_NAMES = {"squat": "SQUAT", "hinge": "DL", "press": "PRESS", "curl": "CURL"}
 
 
 class Display:
@@ -39,13 +42,14 @@ class Display:
     # -- tracker events --------------------------------------------------------
 
     def rep(self, movement, count):
-        self.show(f"{SHORT_NAMES.get(movement, movement)} {count}")
+        self.show(f"{SHORT_NAMES.get(movement, movement)} {count}")        # SQUAT 3, DL 5
 
     def set_done(self, reps):
-        self.show(f"{reps} REPS", seconds=60)
+        self.show(f"{reps} REPS", seconds=60)                                # 5 REPS
 
     def set_read(self, reps, weight_lb, confidence):
         if weight_lb is None:
-            self.show(f"{reps} X ? LB", YELLOW, seconds=90)
+            self.show(f"{reps} REPS", YELLOW, seconds=90)                    # weight unread
         else:
-            self.show(f"{reps} X {weight_lb:g} LB", GREEN if confidence == "high" else YELLOW, seconds=90)
+            color = GREEN if confidence == "high" else YELLOW
+            self.show(f"{reps} X {weight_lb:g}", color, seconds=90)          # 5 X 185
