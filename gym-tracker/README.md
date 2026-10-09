@@ -41,6 +41,12 @@ shows the live count (`SQUAT 3`, `DL 5`); when the set ends, `5 REPS`; once
 Claude has read the plates, `5 X 185` (pounds), green if confident, yellow
 otherwise, or a yellow `5 X ?` if the weight couldn't be read.
 
+Normal display (set 2026-10-09): only the Time app is enabled (Date and Battery
+off, so nothing rotates), 12-hour time, US date order, Fahrenheit, weekday bar
+starting Sunday. Change it in the clock's web UI at `http://192.168.4.37/` or via
+`PATCH /api/v1/settings` and `PUT /api/v1/apps/order`
+(`{"order": ["Time"], "disabled": ["Date", "Battery"]}`).
+
 Each update is a notification named `gym` that replaces the previous one. The
 panel fits 52 pixels of AWTRIX's double-size font (most characters 6 px plus a
 2 px gap) before text scrolls, so each message has shorter fallbacks (`SQ 10`,
