@@ -31,6 +31,11 @@ class Logbook:
             with open(path, "wb") as f:
                 f.write(jpg)
             frames.append(path)
+        for i, (label, jpg) in enumerate(lift_set.context):
+            path = os.path.join(self.log_dir, "frames", f"{stamp}-set{lift_set.id}-ctx{i}.jpg")
+            with open(path, "wb") as f:
+                f.write(jpg)
+            frames.append(path)
 
         rec = {
             "date": started.strftime("%Y-%m-%d"),

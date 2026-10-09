@@ -199,14 +199,22 @@ class Tracker:
     # -- finished sets -------------------------------------------------------
 
     def _context_frames(self, lift_set):
-        before = [jpg for t, jpg in self.recent if lift_set.t_start - 15 <= t <= lift_set.t_start - 2]
-        after = [jpg for t, jpg in self.recent if t >= lift_set.t_end + 4]
-        frames = []
-        if before:
-            frames.append(("a few seconds before the first rep", before[-1]))
-        if after:
-            frames.append(("a few seconds after the last rep", after[0]))
-        return frames
+        """Frames around the set, when the bar is most likely sitting still.
+
+        Two before and two after, spread out: any single moment may catch the
+        lifter mid-load or still holding the bar (the 2026-10-09 session missed
+        a change plate that way).
+        """
+        def nearest(target, lo, hi):
+            frames = [(abs(t - target), t, jpg) for t, jpg in self.recent if lo <= t <= hi]
+            return min(frames)[1:] if frames else None
+
+        s, e = lift_set.t_start, lift_set.t_end
+        picks = [("about 12 s before the first rep", nearest(s - 12, s - 20, s - 6)),
+                 ("about 3 s before the first rep", nearest(s - 3, s - 6, s - 1.5)),
+                 ("about 5 s after the last rep", nearest(e + 5, e + 3, e + 9)),
+                 ("about 18 s after the last rep", nearest(e + 18, e + 12, e + 24))]
+        return [(label, pick[1]) for label, pick in picks if pick]
 
     def finish(self, lift_set):
         if lift_set is None:
