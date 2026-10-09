@@ -15,7 +15,8 @@ Claude looking at the frames, with these stats as context.
 
 from dataclasses import dataclass, field
 
-FIELDS = ("knee", "hip", "elbow_min", "elbow_mean", "wrist_up", "wrist_vs_hip", "elbow_drop")
+FIELDS = ("knee", "hip", "elbow_min", "elbow_mean", "wrist_up", "wrist_vs_hip", "elbow_drop",
+          "lean", "drop")
 
 # Lose the signal for this long and the counter forgets where it was.
 SIGNAL_TIMEOUT = 3.0
@@ -128,20 +129,61 @@ def _gt(key, limit):
     return lambda s: s.get(key) is not None and s[key] > limit
 
 
+class StandingReference:
+    """Where the shoulders sit when standing, so a squat can be seen as a drop.
+
+    Keeps the last few seconds of shoulder positions; the highest one is
+    "standing". drop = how far below that the shoulders are now, in torso
+    lengths. Works from the upper body alone.
+    """
+
+    def __init__(self, window=10.0):
+        self.window = window
+        self.samples = []   # (t, shoulder_y, torso_px)
+
+    def update(self, f):
+        if f.shoulder_y is None or not f.torso_px:
+            return None
+        self.samples = [s for s in self.samples if f.t - s[0] <= self.window]
+        self.samples.append((f.t, f.shoulder_y, f.torso_px))
+        _, ref_y, ref_torso = min(self.samples, key=lambda s: s[1])
+        return (f.shoulder_y - ref_y) / ref_torso
+
+
+class RepCounters:
+    """All the movement counters, fed one frame of Features at a time."""
+
+    def __init__(self):
+        self.reference = StandingReference()
+        self.counters = make_counters()
+
+    def update(self, f):
+        f.drop = self.reference.update(f)
+        events = []
+        for counter in self.counters:
+            event = counter.update(f)
+            if event is not None:
+                events.append(event)
+        return events
+
+
 def make_counters():
-    """The movement families we recognise, with thresholds and gates."""
+    """The movement families we recognise, with thresholds and gates.
+
+    Squat and hinge use upper-body signals (shoulder drop, torso lean): the
+    garage camera cuts off at the shins, so knee and hip angles, which need
+    the ankles and knees, are usually missing there.
+    """
     return [
-        # Squat: knees close well past 90-ish and reopen, with the hands up
-        # at the shoulders/chest (bar on back or front rack, goblet).
-        CycleCounter("squat", "knee", rest=155, turn=110, gates=(
+        # Squat: the shoulders drop well below standing and come back up, with
+        # the hands up at the shoulders/chest (bar on back or front rack, goblet).
+        CycleCounter("squat", "drop", rest=0.2, turn=0.5, gates=(
             _gt("turn_wrist_vs_hip", 0.25),   # hands above hips in the hole
-            _lt("turn_hip", 130),             # hips actually flexed too
         )),
-        # Hinge (deadlift, trap-bar deadlift, RDL): hips close and reopen with
-        # the arms hanging and the hands down near the knees. Knee bend isn't
-        # gated - a trap-bar pull bends the knees as much as a squat; the hand
-        # position is what separates the two.
-        CycleCounter("hinge", "hip", rest=155, turn=115, gates=(
+        # Hinge (deadlift, trap-bar deadlift, RDL): the torso tips forward and
+        # comes back up with the arms hanging and the hands down near the knees.
+        # The hand position is what separates it from a squat, which also leans.
+        CycleCounter("hinge", "lean", rest=25, turn=45, gates=(
             _lt("turn_wrist_vs_hip", -0.3),   # hands well below hips at the bottom
             _gt("min_elbow_mean", 120),       # arms stay (roughly) straight
         )),

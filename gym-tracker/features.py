@@ -35,6 +35,13 @@ class Features:
     wrist_up: float | None = None    # wrists above shoulders, torso lengths (mean)
     wrist_vs_hip: float | None = None  # wrists above hips, torso lengths (mean)
     elbow_drop: float | None = None    # elbows below shoulders, torso lengths (mean)
+    # Upper-body-only signals, for when the legs are out of frame (the garage
+    # camera cuts off at the shins, so knee and hip angles are often missing).
+    lean: float | None = None          # torso lean from vertical, deg (0 = upright)
+    shoulder_y: float | None = None    # shoulder height in the image, px (down = bigger)
+    torso_px: float | None = None      # shoulder-to-hip length in the image, px
+    drop: float | None = None          # filled in by reps.RepCounters: how far the
+                                       # shoulders sit below standing, torso lengths
 
 
 def _angle(a, b, c):
@@ -100,9 +107,19 @@ def compute(landmarks, world, width, height, t):
     elbow_sides = [s for s in sides if vis(ELBOW[s])]
     elbow_y = _mean(px(ELBOW[s])[1] for s in elbow_sides)
 
+    sh_w = [w(SHOULDER[s]) for s in shoulders]
+    hip_w = [w(HIP[s]) for s in hips]
+    up = tuple(_mean(p[i] for p in sh_w) - _mean(p[i] for p in hip_w) for i in range(3))
+    norm = math.sqrt(sum(c * c for c in up))
+    # World y points down, so upright means the hip->shoulder vector is (0, -1, 0).
+    lean = math.degrees(math.acos(max(-1.0, min(1.0, -up[1] / norm)))) if norm else None
+
     return Features(
         t=t,
         person=True,
+        lean=lean,
+        shoulder_y=sh_y,
+        torso_px=torso,
         knee=knee,
         hip=hip,
         elbow_min=min(elbows) if elbows else None,

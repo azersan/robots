@@ -9,17 +9,19 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from features import Features  # noqa: E402
-from reps import make_counters  # noqa: E402
+from reps import RepCounters  # noqa: E402
 from sets import SetTracker  # noqa: E402
 
 FPS = 15
 
 # Body positions. Angles in degrees, heights in torso lengths.
-STAND = dict(knee=175, hip=175, elbow_min=170, elbow_mean=170, wrist_up=-1.0, wrist_vs_hip=0.0, elbow_drop=0.6)
+# Shoulder height is in px with a 200 px torso, so a 160 px drop is 0.8 torso lengths.
+STAND = dict(knee=175, hip=175, elbow_min=170, elbow_mean=170, wrist_up=-1.0, wrist_vs_hip=0.0, elbow_drop=0.6,
+             lean=5, shoulder_y=200, torso_px=200)
 # Bar on the back: hands up at the shoulders, elbows bent.
 SQUAT_TOP = dict(STAND, elbow_min=70, elbow_mean=75, wrist_up=0.0, wrist_vs_hip=1.0, elbow_drop=0.3)
-SQUAT_BOTTOM = dict(SQUAT_TOP, knee=85, hip=70, wrist_vs_hip=0.6)
-DL_BOTTOM = dict(STAND, knee=115, hip=80, wrist_vs_hip=-0.9)
+SQUAT_BOTTOM = dict(SQUAT_TOP, knee=85, hip=70, wrist_vs_hip=0.6, lean=35, shoulder_y=360)
+DL_BOTTOM = dict(STAND, knee=115, hip=80, wrist_vs_hip=-0.9, lean=70, shoulder_y=320)
 PRESS_RACK = dict(STAND, elbow_min=55, elbow_mean=60, wrist_up=0.05, wrist_vs_hip=1.0, elbow_drop=0.3)
 PRESS_TOP = dict(PRESS_RACK, elbow_min=170, elbow_mean=172, wrist_up=1.0, wrist_vs_hip=2.0, elbow_drop=-0.3)
 CURL_TOP = dict(STAND, elbow_min=45, elbow_mean=50, wrist_up=-0.1, wrist_vs_hip=0.9)
@@ -48,17 +50,15 @@ def reps(top, bottom, n, down=1.2, up=1.2, pause=0.5):
 
 
 def run(frames, tracker=None):
-    counters = make_counters()
+    counters = RepCounters()
     tracker = tracker or SetTracker()
     events, sets = [], []
     for f in frames:
-        for c in counters:
-            ev = c.update(f)
-            if ev:
-                events.append(ev)
-                done = tracker.on_rep(ev)
-                if done:
-                    sets.append(done)
+        for ev in counters.update(f):
+            events.append(ev)
+            done = tracker.on_rep(ev)
+            if done:
+                sets.append(done)
         done = tracker.tick(f.t)
         if done:
             sets.append(done)
@@ -105,7 +105,7 @@ def test_squat_is_not_a_hinge_and_hinge_is_not_a_squat():
 
 
 def test_partial_rep_does_not_count():
-    half = dict(SQUAT_BOTTOM, knee=130, hip=120)
+    half = dict(SQUAT_BOTTOM, knee=130, hip=120, lean=15, shoulder_y=250)
     events, _ = run(timeline((SQUAT_TOP, 1), (half, 1), (SQUAT_TOP, 1)))
     assert events == []
 
@@ -138,3 +138,12 @@ def test_stray_rep_yields_to_the_next_movement():
     events, sets = run(frames)
     assert [e.movement for e in events] == ["squat"] + ["press"] * 5
     assert [(s.movement, s.reps) for s in sets] == [("press", 5)]
+
+
+def test_squat_and_deadlift_count_without_legs_in_frame():
+    # The garage camera cuts off at the shins: no knee or hip angles at all.
+    legless = lambda frames: [Features(**{**f.__dict__, "knee": None, "hip": None}) for f in frames]
+    sq, _ = run(legless(timeline((SQUAT_TOP, 1), *reps(SQUAT_TOP, SQUAT_BOTTOM, 4))))
+    dl, _ = run(legless(timeline((STAND, 1), *reps(STAND, DL_BOTTOM, 4))))
+    assert [e.movement for e in sq] == ["squat"] * 4
+    assert [e.movement for e in dl] == ["hinge"] * 4

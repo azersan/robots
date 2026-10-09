@@ -37,7 +37,7 @@ from mediapipe.tasks.python import vision
 import features
 from display import DEFAULT_HOST as DISPLAY_HOST, Display
 from logbook import Logbook
-from reps import make_counters
+from reps import RepCounters
 from sets import SetTracker
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -212,7 +212,7 @@ class Tracker:
         # be shown with the bar at rest before and after it: frames taken
         # mid-rep are often blurred or have the plates out of the shot.
         self.recent = collections.deque(maxlen=60)
-        self.counters = make_counters()
+        self.counters = RepCounters()
         self.sets = SetTracker(rest_gap=self.args.rest_gap, min_reps=self.args.min_reps)
         self.last_person = None
         self.sets_done = 0
@@ -293,10 +293,7 @@ class Tracker:
                 print(f"[{time.strftime('%H:%M:%S')}] Person in frame - tracking")
             return ["IDLE - watching for a person"]
 
-        for counter in self.counters:
-            event = counter.update(f)
-            if event is None:
-                continue
+        for event in self.counters.update(f):
             self.finish(self.sets.on_rep(event, jpeg(frame)))
             cur = self.sets.current
             if cur is not None and cur.movement == event.movement:
