@@ -42,9 +42,10 @@ Claude has read the plates, `5 X 185` (pounds), green if confident, yellow
 otherwise, or a yellow `5 X ?` if the weight couldn't be read.
 
 Normal display: the clock's only app is `TimeBat` (`clock/timebat.be`), a Berry
-script that runs on the clock and draws the time in the clock's own large digits
+script that runs on the clock and draws the calendar icon (day of the month) and
+the time in the clock's own large digits
 (read off its screen; this build only gives scripts small fonts) with a blinking
-colon, plus a battery gauge at the right edge (green > 50 %, yellow > 20 %, red).
+colon, plus a small battery cell under the time (green > 50 %, yellow > 20 %, red).
 The built-in Time, Date and Battery apps are disabled, so nothing rotates.
 `clock/install.sh` reinstalls it. Clock settings: New York time
 (`PUT /api/v1/system` with `tzName` + POSIX `tz`; it shipped on Berlin),

@@ -1,9 +1,10 @@
-# Time with a small battery gauge, for the garage clock (AWTRIX NG on a TC002).
+# Calendar, time and a small battery gauge, for the garage clock (AWTRIX NG on a TC002).
 # Shown instead of the built-in Time app; install with clock/install.sh.
 #
 # Scripts on this build only get the small fonts, so the digits are the
 # clock's own 3x5 glyphs (read back off its screen) drawn at double size,
-# matching the built-in clock and notifications.
+# matching the built-in clock and notifications. The calendar page copies the
+# built-in clock's icon pixel for pixel.
 
 var DIGITS = [
   [7, 5, 5, 5, 7],  # 0   each row is 3 bits, left pixel = 4
@@ -18,23 +19,37 @@ var DIGITS = [
   [7, 5, 7, 1, 7],  # 9
 ]
 
-var TOP = 2          # digits fill rows 2..11, like the built-in clock
-var TIME_AREA = 46   # columns 0..45; the battery gauge sits at 48..51
+var TOP = 2          # time digits fill rows 2..11, like the built-in clock
+var TIME_X = 17      # time sits right of the 16x16 calendar icon
 
 class TimeBattery
-  def glyph(x, rows, color)
+  def glyph(x, y, rows, color)
     for r: 0 .. 4
       var bits = rows[r]
       for c: 0 .. 2
-        if bits & (4 >> c) rect_fill(x + 2 * c, TOP + 2 * r, 2, 2, color) end
+        if bits & (4 >> c) rect_fill(x + 2 * c, y + 2 * r, 2, 2, color) end
       end
+    end
+  end
+
+  # The built-in clock's calendar page: red header, white page, day in black.
+  def calendar(d)
+    rect_fill(0, 0, 16, 2, 0xFF0000)
+    rect_fill(0, 2, 16, 14, 0xFFFFFF)
+    if d < 1 return end
+    if d < 10
+      self.glyph(5, 4, DIGITS[d], 0x000000)
+    else
+      self.glyph(1, 4, DIGITS[d / 10], 0x000000)
+      self.glyph(9, 4, DIGITS[d % 10], 0x000000)
     end
   end
 
   def draw()
     clear()
-    var h = hour()
     var white = 0xFFFFFF
+    self.calendar(day())
+    var h = hour()
     if h >= 0
       if !settings.get("time24h") h = (h + 11) % 12 + 1 end
       var m = minute()
@@ -46,7 +61,7 @@ class TimeBattery
       digits.push(m % 10)
       # Each digit is 6 px + 2 px gap; the colon is 2 px + 2 px gap.
       var w = size(digits) * 8 + 4 - 2
-      var x = (TIME_AREA - w) / 2
+      var x = TIME_X + (width() - TIME_X - w) / 2
       for i: 0 .. size(digits) - 1
         if i == n_hour
           if second() % 2 == 0
@@ -55,20 +70,20 @@ class TimeBattery
           end
           x += 4
         end
-        self.glyph(x, DIGITS[digits[i]], white)
+        self.glyph(x, TOP, DIGITS[digits[i]], white)
         x += 8
       end
     end
 
-    # Battery: a cell at the right edge, filled bottom-up by charge.
+    # Battery: a small cell under the time, right-aligned, filled left to right.
     var b = sensor.battery()
     if b != nil
       var color = b > 50 ? 0x00C000 : (b > 20 ? 0xFFD000 : 0xFF0000)
       var grey = 0x606060
-      line(49, TOP, 50, TOP, grey)
-      rect(48, TOP + 1, 4, 9, grey)
-      var fill = (7 * b + 50) / 100
-      if fill > 0 rect_fill(49, TOP + 9 - fill, 2, fill, color) end
+      rect(40, 13, 11, 3, grey)
+      pixel(51, 14, grey)
+      var fill = (9 * b + 50) / 100
+      if fill > 0 line(41, 14, 40 + fill, 14, color) end
     end
   end
 end
