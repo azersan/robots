@@ -37,6 +37,7 @@ from mediapipe.tasks.python import vision
 import features
 from display import DEFAULT_HOST as DISPLAY_HOST, Display
 from logbook import Logbook
+from recorder import SessionRecorder
 from reps import RepCounters
 from sets import SetTracker
 
@@ -203,6 +204,7 @@ class Tracker:
             self.weigh = weigh
             self.weigher = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.display = None if args.no_display else Display(args.display_host)
+        self.recorder = None if args.no_record else SessionRecorder(args.log_dir)
         self.pending = []
         self.state = "idle"
         self._new_session()
@@ -276,11 +278,13 @@ class Tracker:
         concurrent.futures.wait(self.pending)
         self.pending = []
         self.log.push_session(self.args.sheet)
+        if self.recorder:
+            self.recorder.stop()
         self._new_session()
 
     # -- per frame -----------------------------------------------------------
 
-    def step(self, frame, f):
+    def step(self, frame, f, landmarks=None):
         """Advance on one analysed frame. Returns HUD lines."""
         if f.person:
             self.last_person = f.t
@@ -291,6 +295,8 @@ class Tracker:
             if f.person:
                 self.state = "active"
                 print(f"[{time.strftime('%H:%M:%S')}] Person in frame - tracking")
+                if self.recorder:
+                    self.recorder.start()
             return ["IDLE - watching for a person"]
 
         for event in self.counters.update(f):
@@ -305,6 +311,8 @@ class Tracker:
                 if self.display and len(cur.events) >= self.args.min_reps:
                     self.display.rep(event.movement, len(cur.events))
         self.finish(self.sets.tick(f.t))
+        if self.recorder:
+            self.recorder.frame(frame, f, landmarks)   # after the counters fill in f.drop
 
         if self.last_person is None or f.t - self.last_person > self.args.absent_timeout:
             print(f"[{time.strftime('%H:%M:%S')}] Nobody in frame - session over")
@@ -340,6 +348,8 @@ def main():
     parser.add_argument("--sheet", action="store_true",
                         help="Append each session to the workout-log Google Sheet")
     parser.add_argument("--headless", action="store_true", help="No preview window")
+    parser.add_argument("--no-record", action="store_true",
+                        help="Don't save a clip + per-frame CSV of each session (logs/clips)")
     parser.add_argument("--display-host", default=DISPLAY_HOST,
                         help="Garage LED clock (AWTRIX) for live reps/results")
     parser.add_argument("--no-display", action="store_true", help="Don't post to the LED clock")
@@ -380,7 +390,7 @@ def main():
                 landmarks = result.pose_landmarks[0] if result.pose_landmarks else None
                 world = result.pose_world_landmarks[0] if result.pose_world_landmarks else None
                 h, w = frame.shape[:2]
-                hud = tracker.step(frame, features.compute(landmarks, world, w, h, t))
+                hud = tracker.step(frame, features.compute(landmarks, world, w, h, t), landmarks)
 
             if not args.headless:
                 draw(frame, landmarks, hud)
