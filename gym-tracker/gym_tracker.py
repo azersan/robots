@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import collections
 import concurrent.futures
 import os
 import platform
@@ -185,6 +186,10 @@ class Tracker:
         self._new_session()
 
     def _new_session(self):
+        # About one frame a second from the last minute, so a finished set can
+        # be shown with the bar at rest before and after it: frames taken
+        # mid-rep are often blurred or have the plates out of the shot.
+        self.recent = collections.deque(maxlen=60)
         self.counters = make_counters()
         self.sets = SetTracker(rest_gap=self.args.rest_gap, min_reps=self.args.min_reps)
         self.last_person = None
@@ -193,9 +198,20 @@ class Tracker:
 
     # -- finished sets -------------------------------------------------------
 
+    def _context_frames(self, lift_set):
+        before = [jpg for t, jpg in self.recent if lift_set.t_start - 15 <= t <= lift_set.t_start - 2]
+        after = [jpg for t, jpg in self.recent if t >= lift_set.t_end + 4]
+        frames = []
+        if before:
+            frames.append(("a few seconds before the first rep", before[-1]))
+        if after:
+            frames.append(("a few seconds after the last rep", after[0]))
+        return frames
+
     def finish(self, lift_set):
         if lift_set is None:
             return
+        lift_set.context = self._context_frames(lift_set)
         self.sets_done += 1
         print(f"Set done: {lift_set.movement} x {lift_set.reps}"
               + ("" if self.weigher else " (not weighing)"))
@@ -233,6 +249,8 @@ class Tracker:
         """Advance on one analysed frame. Returns HUD lines."""
         if f.person:
             self.last_person = f.t
+        if self.state == "active" and (not self.recent or f.t - self.recent[-1][0] >= 1.0):
+            self.recent.append((f.t, jpeg(frame)))
 
         if self.state == "idle":
             if f.person:
@@ -250,7 +268,9 @@ class Tracker:
                 # Live count is cycles; a hinge set's extra put-down cycle is
                 # only dropped when the set is closed.
                 print(f"  {event.movement} rep {len(cur.events)} ({event.t_end - event.t_start:.1f}s)")
-                if self.display:
+                # The clock starts counting at the second rep: a lone first
+                # "rep" is often just crouching or reaching, and gets dropped.
+                if self.display and len(cur.events) >= self.args.min_reps:
                     self.display.rep(event.movement, len(cur.events))
         self.finish(self.sets.tick(f.t))
 

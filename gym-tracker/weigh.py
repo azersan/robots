@@ -36,7 +36,10 @@ FAMILY_HINTS = {
 
 SYSTEM = """You review short clips of someone lifting in their home gym, taken by a \
 fixed camera. A pose tracker has already segmented one set and counted the reps; \
-you get a few frames from it plus the tracker's measurements.
+you get a few frames from it plus the tracker's measurements. Frames from just
+before and after the set usually show the bar at rest, where the plates are
+sharpest; frames taken at the end of a rep show the movement but may be blurred
+or have the plates partly out of the shot. The camera position is fixed.
 
 Your job is to fill in what the tracker can't see: the specific exercise and the \
 load. The result is appended to the lifter's workout log, so be honest about \
@@ -132,12 +135,21 @@ CLAUDE_FLAGS = [
 def read_set(lift_set, claude="claude"):
     """Returns a SetReading, or raises RuntimeError if the CLI call fails."""
     content = []
-    for jpg in _pick_frames(lift_set.keyframes):
+
+    def add(label, jpg):
+        content.append({"type": "text", "text": f"Frame {label}:"})
         content.append({
             "type": "image",
             "source": {"type": "base64", "media_type": "image/jpeg",
                        "data": base64.standard_b64encode(jpg).decode()},
         })
+
+    # Frames around the set usually show the bar still (racked or on the floor),
+    # which is when the plates are easiest to read; rep frames show the lift.
+    for label, jpg in lift_set.context:
+        add(label, jpg)
+    for i, jpg in enumerate(_pick_frames(lift_set.keyframes, n=2), 1):
+        add(f"at the end of a rep ({i})", jpg)
     content.append({"type": "text", "text": _describe(lift_set)})
     message = {"type": "user", "message": {"role": "user", "content": content}}
 

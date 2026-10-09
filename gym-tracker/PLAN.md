@@ -51,13 +51,14 @@ Motors are out of scope. The Pi is just a camera here.
 
 ## Next steps
 
-0. **Camera placement** (as of 2026-10-09): the camera looks along the bar
-   (the right direction for reading plates) but sits too close to the rack: no
-   floor or uprights' tops in frame, and a stored bar end blocks the left third.
-   Back it up 8–12 ft at chest height so the whole rack and floor fit. Bright
-   garage-door windows are in frame on the right; fine unless the lifter stands
-   in front of them.
-
+0. **Camera placement is fixed** (Tony, 2026-10-09: no flexibility on where it
+   goes). It looks along the bar from close to the rack, so the software has to
+   cope: plates are read from frames with the bar at rest just before/after a
+   set (where "10LB" is legible from here), not from blurred mid-rep frames.
+   First live session found the press lockout reads only 126-146° from this
+   angle (gate lowered to 120°), and crouching at the laptop produces stray
+   single "reps" (now dropped quietly, and the clock only counts from rep 2).
+   Next: track the bar/plates themselves so a rep needs the bar to move.
 1. **First real session.** Mount the camera side-on to the lifting spot (facing
    the plate faces, whole body in frame, decent light) and run on the Mac with
    the preview window and without `--sheet`.

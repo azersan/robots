@@ -147,7 +147,10 @@ def make_counters():
         )),
         # Overhead press: wrists go from shoulder height to locked out overhead.
         CycleCounter("press", "wrist_up", rest=0.35, turn=0.65, gates=(
-            _gt("turn_elbow_mean", 145),      # elbows locked out at the top
+            # Elbows (nearly) locked out at the top. 120 not 160+: seen from an
+            # angle, a locked-out arm measures 126-146 (garage camera, 2026-10-09);
+            # hands 0.65 torso lengths above the shoulders already means overhead.
+            _gt("turn_elbow_mean", 120),
         )),
         # Curl: elbow closes and reopens with the upper arm hanging down and
         # the hands never going overhead (rules out the press lowering phase).

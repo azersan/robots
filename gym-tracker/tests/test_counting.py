@@ -128,3 +128,13 @@ def test_signal_dropout_resets_counter():
                      **{k: getattr(f, k) for k in SQUAT_TOP}) for f in timeline((SQUAT_TOP, 1))]
     events, _ = run(frames + gap + back)
     assert events == []
+
+
+def test_stray_rep_yields_to_the_next_movement():
+    # Crouching to the laptop reads as one squat; the press that follows right
+    # after must start its own set instead of being thrown away as a misread.
+    frames = timeline((SQUAT_TOP, 1), (SQUAT_BOTTOM, 1.2), (SQUAT_TOP, 1.2),
+                      (PRESS_RACK, 1), *reps(PRESS_RACK, PRESS_TOP, 5, down=1.0, up=1.0))
+    events, sets = run(frames)
+    assert [e.movement for e in events] == ["squat"] + ["press"] * 5
+    assert [(s.movement, s.reps) for s in sets] == [("press", 5)]

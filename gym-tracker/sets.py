@@ -20,6 +20,7 @@ class LiftSet:
     movement: str
     events: list = field(default_factory=list)
     keyframes: list = field(default_factory=list)   # JPEG bytes, one per rep
+    context: list = field(default_factory=list)     # (label, JPEG) from around the set, bar at rest
     id: int = field(default_factory=lambda: next(_ids))
 
     @property
@@ -39,7 +40,7 @@ class SetTracker:
     def __init__(self, rest_gap=25.0, min_reps=2, hot_window=8.0, max_keyframes=6):
         self.rest_gap = rest_gap
         self.min_reps = min_reps
-        # While a set is "hot" (last rep this recent), a rep of a different
+        # While a real set is "hot" (last rep this recent), a rep of a different
         # movement is treated as a misread rather than starting a new set.
         self.hot_window = hot_window
         self.max_keyframes = max_keyframes
@@ -52,8 +53,12 @@ class SetTracker:
         if cur is not None:
             gap = event.t_start - cur.t_end
             if event.movement != cur.movement and gap < self.hot_window:
-                return None
-            if event.movement != cur.movement or gap > self.rest_gap:
+                if len(cur.events) >= self.min_reps:
+                    return None   # mid-set: a one-off misread of another movement
+                # The open "set" is a lone stray rep (crouching, reaching): drop it
+                # and start the new movement rather than losing this rep.
+                self.current = None
+            elif event.movement != cur.movement or gap > self.rest_gap:
                 finished = self._close()
         if self.current is None:
             self.current = LiftSet(event.movement)
