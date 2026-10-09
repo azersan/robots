@@ -48,7 +48,10 @@ Normal display: the clock's only app is `TimeBat` (`clock/timebat.be`), a Berry
 script that runs on the clock and draws the calendar icon (day of the month) and
 the time in the clock's own large digits
 (read off its screen; this build only gives scripts small fonts) with a blinking
-colon, plus a small battery cell under the time (green > 50 %, yellow > 20 %, red).
+colon, plus a small battery cell under the time (green > 50 %, yellow > 20 %, red)
+with a green dot beside it while charging. The clock has no charging flag, so the
+script samples the battery voltage once a minute and calls it charging when it
+has risen 0.02 V over three minutes (off again once it falls).
 The built-in Time, Date and Battery apps are disabled, so nothing rotates.
 `clock/install.sh` reinstalls it. Clock settings: New York time
 (`PUT /api/v1/system` with `tzName` + POSIX `tz`; it shipped on Berlin),

@@ -23,6 +23,37 @@ var TOP = 2          # time digits fill rows 2..11, like the built-in clock
 var TIME_X = 17      # time sits right of the 16x16 calendar icon
 
 class TimeBattery
+  var volts       # one battery-voltage sample a minute, last 10 minutes
+  var since       # loop() calls since the last sample
+  var charging
+
+  def init()
+    self.volts = []
+    self.since = 60
+    self.charging = false
+  end
+
+  # The clock reports no charging flag, so infer it: a charger lifts the
+  # battery voltage within a minute or two. Compare the newest minute with
+  # three minutes earlier; rising = charging, falling = not.
+  def loop()
+    self.since += 1
+    if self.since < 60 return end
+    self.since = 0
+    var v = sensor.battery_volts()
+    if v == nil return end
+    self.volts.push(v)
+    if size(self.volts) > 10 self.volts.remove(0) end
+    var n = size(self.volts)
+    if n < 4 return end
+    var delta = self.volts[n - 1] - self.volts[n - 4]
+    if delta >= 0.02
+      self.charging = true
+    elif delta <= -0.005
+      self.charging = false
+    end
+  end
+
   def glyph(x, y, rows, color)
     for r: 0 .. 4
       var bits = rows[r]
@@ -84,6 +115,7 @@ class TimeBattery
       pixel(51, 14, grey)
       var fill = (9 * b + 50) / 100
       if fill > 0 line(41, 14, 40 + fill, 14, color) end
+      if self.charging rect_fill(37, 13, 2, 2, 0x00FF00) end   # charging dot
     end
   end
 end
