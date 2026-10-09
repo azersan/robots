@@ -31,6 +31,16 @@ Pi setup and rebuild: [`../raspi-camera/pi-5/SETUP.md`](../raspi-camera/pi-5/SET
    ends: it prints a summary and, with `--sheet`, appends rows to the sheet
    (back-to-back identical sets collapse into one row, e.g. 3 × 5).
 
+## Garage display
+
+`display.py` posts to the Ulanzi LED clock in the garage (`http://192.168.4.37`,
+custom app `garage`, a 52×16 text area). While a set is going it shows the live
+count (`SQUAT 3`); when the set ends it shows `5 REPS`; once Claude has read the
+plates it shows `5 X 185 LB`, green if confident, yellow otherwise (`5 X ? LB`
+if the weight couldn't be read). Posts run on a background thread with a 2 s
+timeout, so an unplugged clock never stalls tracking. `--display-url` points it
+elsewhere; `--no-display` turns it off.
+
 ## Setup (Mac)
 
 ```bash

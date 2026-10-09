@@ -33,6 +33,7 @@ from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
 import features
+from display import DEFAULT_URL as DISPLAY_URL, Display
 from logbook import Logbook
 from reps import make_counters
 from sets import SetTracker
@@ -178,6 +179,7 @@ class Tracker:
             import weigh
             self.weigh = weigh
             self.weigher = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.display = None if args.no_display else Display(args.display_url)
         self.pending = []
         self.state = "idle"
         self._new_session()
@@ -197,6 +199,8 @@ class Tracker:
         self.sets_done += 1
         print(f"Set done: {lift_set.movement} x {lift_set.reps}"
               + ("" if self.weigher else " (not weighing)"))
+        if self.display:
+            self.display.set_done(lift_set.reps)
         if self.weigher is None:
             self.log.record(lift_set)
             return
@@ -210,6 +214,8 @@ class Tracker:
             error = f"{type(e).__name__}: {e}"
         rec = self.log.record(lift_set, reading, error)
         w = rec["weight_lb"]
+        if self.display:
+            self.display.set_read(rec["reps"], w, reading.confidence if reading else None)
         self.last_result = f"{rec['exercise']} {w:g} lb x {rec['reps']}" if w else f"{rec['exercise']} x {rec['reps']}"
         print(f"  -> {self.last_result}" + (f"  [{error}]" if error else
               f"  ({reading.confidence}: {reading.notes})"))
@@ -244,6 +250,8 @@ class Tracker:
                 # Live count is cycles; a hinge set's extra put-down cycle is
                 # only dropped when the set is closed.
                 print(f"  {event.movement} rep {len(cur.events)} ({event.t_end - event.t_start:.1f}s)")
+                if self.display:
+                    self.display.rep(event.movement, len(cur.events))
         self.finish(self.sets.tick(f.t))
 
         if self.last_person is None or f.t - self.last_person > self.args.absent_timeout:
@@ -277,6 +285,9 @@ def main():
     parser.add_argument("--sheet", action="store_true",
                         help="Append each session to the workout-log Google Sheet")
     parser.add_argument("--headless", action="store_true", help="No preview window")
+    parser.add_argument("--display-url", default=DISPLAY_URL,
+                        help="LED clock custom-app endpoint for live reps/results")
+    parser.add_argument("--no-display", action="store_true", help="Don't post to the LED clock")
     parser.add_argument("--log-dir", default=os.path.join(HERE, "logs"))
     args = video_source.parse_args(parser=parser)
 

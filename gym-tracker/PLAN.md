@@ -22,6 +22,7 @@ Motors are out of scope. The Pi is just a camera here.
 | **Log locally always; the sheet is opt-in (`--sheet`)** | Until the counting is trusted on the real camera, it shouldn't write unattended to the real log. The JSONL log keeps every rep's measurements for tuning. |
 | **Row format matches the hand-kept log** | Exercise names follow the sheet's existing ones. Back-to-back identical sets collapse to one row (3 × 5 → Reps 5, Sets 3). Sets is blank for a single set. |
 | **Sets under 2 reps are dropped** | Bending to load a plate looks like a single deadlift. |
+| **Live feedback on the garage LED clock** | Added 2026-10-09 once the display was up: live rep count during a set, then reps × weight when the set has been read, so a bad read is visible on the spot. |
 | **Stream at 1280×720** | 640×480 is too small to read plate markings. |
 
 ## What's been verified
@@ -48,6 +49,14 @@ Motors are out of scope. The Pi is just a camera here.
   person yet; the room was dark.
 
 ## Next steps
+
+0. **Camera placement** (as of 2026-10-09): the camera looks along the bar
+   (the right direction for reading plates) but sits too close to the rack: no
+   floor or uprights' tops in frame, and a stored bar end blocks the left third.
+   Back it up 8–12 ft at chest height so the whole rack and floor fit. Bright
+   garage-door windows are in frame on the right; fine unless the lifter stands
+   in front of them. Confirm the display's 52×16 area fits the longest messages
+   (`DEADLIFT 5`, `10 X 135 LB`).
 
 1. **First real session.** Mount the camera side-on to the lifting spot (facing
    the plate faces, whole body in frame, decent light) and run on the Mac with
