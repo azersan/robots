@@ -33,14 +33,20 @@ Pi setup and rebuild: [`../raspi-camera/pi-5/SETUP.md`](../raspi-camera/pi-5/SET
 
 ## Garage display
 
-`display.py` posts to the Ulanzi TC002 LED clock in the garage
-(`http://192.168.4.37`, custom app `garage`, 52×16 pixels, stock firmware).
-While a set is going it shows the live count (`SQUAT 3`, `DL 5`); when the set
-ends, `5 REPS`; once Claude has read the plates, `5 X 185` (pounds), green if
-confident, yellow otherwise, or a yellow `5 REPS` if the weight couldn't be
-read. The stock font fits about 8 characters and has no `?`, so messages stay
-short. Posts run on a background thread with a 2 s timeout, so an unplugged
-clock never stalls tracking. `--display-url` points it elsewhere;
+`display.py` sends notifications to the Ulanzi TC002 LED clock in the garage
+(`192.168.4.37`, 52×16 pixels), which runs the unofficial
+[AWTRIX NG TC002 port](https://github.com/sanderdw/awtrix-ng-tc002) (flashed
+2026-10-09; see `PLAN.md` for how to go back to stock). While a set is going it
+shows the live count (`SQUAT 3`, `DL 5`); when the set ends, `5 REPS`; once
+Claude has read the plates, `5 X 185` (pounds), green if confident, yellow
+otherwise, or a yellow `5 X ?` if the weight couldn't be read.
+
+Each update is a notification named `gym` that replaces the previous one. The
+panel fits 52 pixels of AWTRIX's double-size font (most characters 6 px plus a
+2 px gap) before text scrolls, so each message has shorter fallbacks (`SQ 10`,
+`12X135`). `tools/clock_screen.py out.png` saves what the clock is showing, for
+checking new messages. Posts run on a background thread with a 2 s timeout, so
+an unplugged clock never stalls tracking. `--display-host` points it elsewhere;
 `--no-display` turns it off.
 
 ## Setup (Mac)

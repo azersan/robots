@@ -33,7 +33,7 @@ from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
 import features
-from display import DEFAULT_URL as DISPLAY_URL, Display
+from display import DEFAULT_HOST as DISPLAY_HOST, Display
 from logbook import Logbook
 from reps import make_counters
 from sets import SetTracker
@@ -179,7 +179,7 @@ class Tracker:
             import weigh
             self.weigh = weigh
             self.weigher = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self.display = None if args.no_display else Display(args.display_url)
+        self.display = None if args.no_display else Display(args.display_host)
         self.pending = []
         self.state = "idle"
         self._new_session()
@@ -285,8 +285,8 @@ def main():
     parser.add_argument("--sheet", action="store_true",
                         help="Append each session to the workout-log Google Sheet")
     parser.add_argument("--headless", action="store_true", help="No preview window")
-    parser.add_argument("--display-url", default=DISPLAY_URL,
-                        help="LED clock custom-app endpoint for live reps/results")
+    parser.add_argument("--display-host", default=DISPLAY_HOST,
+                        help="Garage LED clock (AWTRIX) for live reps/results")
     parser.add_argument("--no-display", action="store_true", help="Don't post to the LED clock")
     parser.add_argument("--log-dir", default=os.path.join(HERE, "logs"))
     args = video_source.parse_args(parser=parser)
