@@ -60,6 +60,17 @@ class Display:
         except OSError:
             pass  # clock off or unreachable: the tracker carries on
 
+    def clear(self):
+        """Take the gym notification off the clock."""
+        req = urllib.request.Request(self.url + "/gym", method="DELETE")
+        self._pool.submit(lambda: self._send(req))
+
+    def _send(self, req):
+        try:
+            urllib.request.urlopen(req, timeout=2).read()
+        except OSError:
+            pass
+
     # -- tracker events --------------------------------------------------------
 
     def rep(self, movement, count):

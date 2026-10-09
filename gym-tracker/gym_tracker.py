@@ -229,6 +229,11 @@ class Tracker:
         except Exception as e:  # CLI missing, not logged in, timed out: log the set anyway
             error = f"{type(e).__name__}: {e}"
         rec = self.log.record(lift_set, reading, error)
+        if rec["rejected"]:
+            if self.display:
+                self.display.clear()
+            print(f"  -> not a real set, discarded ({reading.notes})")
+            return
         w = rec["weight_lb"]
         if self.display:
             self.display.set_read(rec["reps"], w, reading.confidence if reading else None)

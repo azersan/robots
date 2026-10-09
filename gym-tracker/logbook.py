@@ -43,6 +43,9 @@ class Logbook:
             "weight_lb": reading.total_weight_lb if reading else None,
             "reading": reading.model_dump() if reading else None,
             "error": error,
+            # Claude judged it not a real set (stray movement): kept here for
+            # tuning, left out of the session summary and the sheet.
+            "rejected": bool(reading) and not reading.real_set,
             "frames": frames,
             # Per-rep measurements, for tuning the thresholds in reps.py.
             "rep_stats": [{k: round(v, 3) for k, v in e.stats.items()} for e in lift_set.events],
@@ -50,7 +53,8 @@ class Logbook:
         path = os.path.join(self.log_dir, started.strftime("%Y-%m-%d") + ".jsonl")
         with open(path, "a") as f:
             f.write(json.dumps(rec) + "\n")
-        self.session.append(rec)
+        if not rec["rejected"]:
+            self.session.append(rec)
         return rec
 
     def session_rows(self):

@@ -47,6 +47,13 @@ uncertainty: if the plates can't be read (occluded, blurry, too far, side-on), s
 so in the notes, lower the confidence, and leave the total null rather than \
 guessing a number.
 
+The tracker works from body pose alone, so it sometimes counts things that \
+aren't a set: crouching or reaching (e.g. at a laptop), walking around, \
+loading plates, handling objects. If the frames don't show this person \
+actually performing the lift, set real_set to false and say what you see in \
+the notes. A rejected set is kept out of the workout log and off the garage \
+display; a real set shows on the display as reps x weight.
+
 Conventions for the log:
 - Weights are pounds. A standard Olympic barbell is 45 lb unless the frames show \
 otherwise (e.g. a 35 lb bar, EZ bar, trap bar). Bumper plates are often color-coded \
@@ -64,6 +71,7 @@ class PlateCount(BaseModel):
 
 
 class SetReading(BaseModel):
+    real_set: bool
     exercise: str
     implement: Literal["barbell", "dumbbell", "kettlebell", "machine", "bodyweight", "other", "unclear"]
     bar_weight_lb: float | None
@@ -102,6 +110,7 @@ def _pick_frames(frames, n=3):
 SCHEMA = {
     "type": "object",
     "properties": {
+        "real_set": {"type": "boolean"},
         "exercise": {"type": "string"},
         "implement": {"type": "string", "enum": ["barbell", "dumbbell", "kettlebell", "machine",
                                                  "bodyweight", "other", "unclear"]},
@@ -116,7 +125,7 @@ SCHEMA = {
         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
         "notes": {"type": "string"},
     },
-    "required": ["exercise", "implement", "bar_weight_lb", "plates_per_side",
+    "required": ["real_set", "exercise", "implement", "bar_weight_lb", "plates_per_side",
                  "total_weight_lb", "confidence", "notes"],
     "additionalProperties": False,
 }
