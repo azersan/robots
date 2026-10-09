@@ -3,7 +3,9 @@
 Gym tracker: watch the camera, notice when someone is lifting, count reps and
 sets, and read the weight off the plates.
 
-  idle   - checks a frame every --idle-interval seconds for a person
+  idle   - every --idle-interval seconds, a cheap motion check (frame
+           difference, no ML); the pose model only runs when something in the
+           picture changed, or every --idle-pose-every seconds as a fallback
   active - runs pose on every frame, counts reps, groups them into sets;
            a finished set goes to Claude (weigh.py) to name the lift and
            read the plates, then into the log (logbook.py)
@@ -23,7 +25,6 @@ import argparse
 import collections
 import concurrent.futures
 import os
-import platform
 import sys
 import time
 import urllib.request
@@ -147,6 +148,27 @@ def load_landmarker(model):
         min_tracking_confidence=0.5,
     )
     return vision.PoseLandmarker.create_from_options(options)
+
+
+class MotionCheck:
+    """Cheap idle check: did enough of the picture change since the last look?
+
+    Compares a small blurred grayscale copy of the frame with the previous
+    one; no ML. Lighting flicker and sensor noise stay under the per-pixel
+    threshold, a person walking in doesn't.
+    """
+
+    def __init__(self, threshold=0.01, pixel_delta=25):
+        self.threshold = threshold
+        self.pixel_delta = pixel_delta
+        self.prev = None
+
+    def changed(self, frame):
+        small = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(frame, (160, 90)), cv2.COLOR_BGR2GRAY), (5, 5), 0)
+        prev, self.prev = self.prev, small
+        if prev is None:
+            return True
+        return (cv2.absdiff(small, prev) > self.pixel_delta).mean() >= self.threshold
 
 
 def jpeg(frame, max_width=1280):
@@ -303,11 +325,14 @@ class Tracker:
 
 def main():
     parser = video_source.create_parser("Gym tracker: reps, sets, and weight from the camera")
-    parser.add_argument("--model", choices=["lite", "full"],
-                        default="lite" if platform.machine() in ("aarch64", "armv7l") else "full",
-                        help="Pose model (default: lite on the Pi, full elsewhere)")
-    parser.add_argument("--idle-interval", type=float, default=2.0,
-                        help="Seconds between person checks while idle (default 2)")
+    parser.add_argument("--model", choices=["lite", "full"], default="full",
+                        help="Pose model (default full: ~18 fps on the Pi 5, which is plenty)")
+    parser.add_argument("--idle-interval", type=float, default=0.5,
+                        help="Seconds between motion checks while idle (default 0.5)")
+    parser.add_argument("--idle-pose-every", type=float, default=30.0,
+                        help="While idle, also run pose this often even without motion (default 30)")
+    parser.add_argument("--motion-threshold", type=float, default=0.01,
+                        help="Fraction of the picture that must change to wake pose (default 0.01)")
     parser.add_argument("--absent-timeout", type=float, default=60.0,
                         help="Seconds with nobody in frame before the session ends (default 60)")
     parser.add_argument("--rest-gap", type=float, default=25.0,
@@ -330,6 +355,8 @@ def main():
     print(f"Pose model: {args.model}. Press q in the window (or Ctrl-C) to quit.")
 
     last_check = float("-inf")
+    last_pose = float("-inf")
+    motion = MotionCheck(args.motion_threshold)
     last_ts = 0
     hud = ["IDLE - watching for a person"]
     try:
@@ -343,8 +370,12 @@ def main():
                 continue
 
             landmarks = None
-            if tracker.state == "active" or t - last_check >= args.idle_interval:
+            run_pose = tracker.state == "active"
+            if not run_pose and t - last_check >= args.idle_interval:
                 last_check = t
+                run_pose = motion.changed(frame) or t - last_pose >= args.idle_pose_every
+            if run_pose:
+                last_pose = t
                 ts = max(int(t * 1000), last_ts + 1)
                 last_ts = ts
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

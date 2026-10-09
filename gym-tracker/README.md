@@ -102,19 +102,30 @@ Tests (synthetic movements, no camera needed): `.venv/bin/python -m pytest tests
 - Whole body in frame, head to feet, through the bottom of each rep.
 - Decent light on the plates. Color-coded bumpers read best.
 
-## Running on the Pi (planned)
+## Running on the Pi (how it runs now)
 
-The code avoids anything Mac-specific so it can move onto the Pi:
+Since 2026-10-09 the tracker runs on the Pi itself as the `gym-tracker` systemd
+service (`gym-tracker.service`), whenever the Pi is on:
 
-- `-s picamera` reads the camera directly with Picamera2 (stop `robot_server.py`
-  first, since only one process can own the camera).
-- `--model` defaults to `lite` on ARM, `full` elsewhere.
-- Use `--headless`. A systemd unit would make it run whenever the Pi is on.
-- Install Claude Code on the Pi and log in (`claude`, then `/login`) for the
-  plate reading, or run with `--no-weigh`.
-- **Unverified:** whether `mediapipe==0.10.31` installs on the Pi's
-  Debian 13 / Python 3.13 (aarch64). Check that first; the fallback is a
-  different mediapipe version or running pose on the Mac/NZXT against the stream.
+- Code in `~/gym-tracker/` (rsync of this folder) plus
+  `~/raspi-camera/video_source.py`; its own venv (`python3 -m venv
+  --system-site-packages .venv`, then `pip install mediapipe==1.1.0 pydantic`:
+  0.10.31 has no Linux ARM build, 1.1.0 does and works unchanged).
+- Reads the camera through `robot-stream` on `localhost:8080`, so the browser
+  view keeps working.
+- Idle: a motion check every 0.5 s (frame difference, no ML); pose runs only
+  when 1 % of the picture changes, or every 30 s. Active: full pose model at
+  about 18 fps (~55 ms a frame, ~1.4 cores).
+- `claude` CLI in `~/.local/bin` (official installer), logged in once with
+  `ssh -t tazersky@pibot5-2g.local ~/.local/bin/claude` then `/login`.
+- `gws` (Linux ARM release) in `~/.local/bin` for `--sheet`; credentials file
+  at `~/.config/gws/credentials.json`.
+- Deploy a change: `rsync -a --exclude .venv --exclude logs --exclude models
+  gym-tracker/ tazersky@pibot5-2g.local:gym-tracker/` then
+  `sudo systemctl restart gym-tracker`. Logs: `journalctl -u gym-tracker -f`.
+
+The Mac can still run it against the stream for debugging, but stop the Pi
+service first so the two don't both post to the clock.
 
 ## Known limits
 

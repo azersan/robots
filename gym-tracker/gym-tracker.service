@@ -1,0 +1,23 @@
+# Gym tracker on the Pi: runs whenever the Pi is on. Reads the camera through
+# robot-stream (so the browser view keeps working), posts to the garage clock,
+# reads plates with the claude CLI, logs to ~/gym-tracker/logs and the sheet.
+# Install:
+#   sudo cp gym-tracker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now gym-tracker
+# Logs: journalctl -u gym-tracker -f
+[Unit]
+Description=Gym tracker (pose reps + Claude plate reading)
+After=network-online.target robot-stream.service
+Wants=network-online.target robot-stream.service
+
+[Service]
+User=tazersky
+WorkingDirectory=/home/tazersky/gym-tracker
+Environment=PATH=/home/tazersky/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE=/home/tazersky/.config/gws/credentials.json
+ExecStart=/home/tazersky/gym-tracker/.venv/bin/python -u gym_tracker.py -s localhost --headless --sheet
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
