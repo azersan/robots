@@ -147,3 +147,13 @@ def test_squat_and_deadlift_count_without_legs_in_frame():
     dl, _ = run(legless(timeline((STAND, 1), *reps(STAND, DL_BOTTOM, 4))))
     assert [e.movement for e in sq] == ["squat"] * 4
     assert [e.movement for e in dl] == ["hinge"] * 4
+
+
+def test_bodyweight_squat_with_hands_at_hips():
+    # Garage, 2026-10-09: bodyweight squats had the hands around hip height at
+    # the bottom (-0.1 to -0.2), which the old "hands above hips" gate refused.
+    bottom = dict(SQUAT_BOTTOM, wrist_vs_hip=-0.2, lean=55)
+    top = dict(SQUAT_TOP, wrist_vs_hip=0.1)
+    events, sets = run(timeline((top, 1), *reps(top, bottom, 3)))
+    assert [e.movement for e in events] == ["squat"] * 3
+    assert sets[0].reps == 3

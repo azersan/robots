@@ -176,15 +176,17 @@ def make_counters():
     """
     return [
         # Squat: the shoulders drop well below standing and come back up, with
-        # the hands up at the shoulders/chest (bar on back or front rack, goblet).
+        # the hands no lower than about hip height: up at the shoulders with a
+        # bar, around the hips in a bodyweight squat (measured -0.1 to -0.2 in
+        # the garage).
         CycleCounter("squat", "drop", rest=0.2, turn=0.5, gates=(
-            _gt("turn_wrist_vs_hip", 0.25),   # hands above hips in the hole
+            _gt("turn_wrist_vs_hip", -0.4),
         )),
         # Hinge (deadlift, trap-bar deadlift, RDL): the torso tips forward and
         # comes back up with the arms hanging and the hands down near the knees.
         # The hand position is what separates it from a squat, which also leans.
         CycleCounter("hinge", "lean", rest=25, turn=45, gates=(
-            _lt("turn_wrist_vs_hip", -0.3),   # hands well below hips at the bottom
+            _lt("turn_wrist_vs_hip", -0.45),  # hands down near the knees at the bottom
             _gt("min_elbow_mean", 120),       # arms stay (roughly) straight
         )),
         # Overhead press: wrists go from shoulder height to locked out overhead.

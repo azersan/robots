@@ -92,6 +92,11 @@ def compute(landmarks, world, width, height, t):
     torso = math.hypot(sh_x - hip_x, sh_y - hip_y)
     if torso < 1:
         return Features(t=t, person=False)
+    # Shoulders below the hips isn't someone lifting. In the garage the pose
+    # model "finds" an upside-down person in the rowing machine, which kept the
+    # tracker thinking someone was there long after Tony left.
+    if sh_y > hip_y:
+        return Features(t=t, person=False)
 
     legs = [s for s in sides if vis(HIP[s]) and vis(KNEE[s]) and vis(ANKLE[s])]
     knee = _mean(_angle(w(HIP[s]), w(KNEE[s]), w(ANKLE[s])) for s in legs)
