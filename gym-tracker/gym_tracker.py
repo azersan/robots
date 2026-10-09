@@ -206,7 +206,7 @@ class Tracker:
         reading, error = None, None
         try:
             reading = self.weigh.read_set(lift_set)
-        except Exception as e:  # API down, refusal, no key: log the set anyway
+        except Exception as e:  # CLI missing, not logged in, timed out: log the set anyway
             error = f"{type(e).__name__}: {e}"
         rec = self.log.record(lift_set, reading, error)
         w = rec["weight_lb"]

@@ -20,7 +20,7 @@ optionally, appended to the workout-log Google Sheet.
    (default 2) are dropped as noise, since bending to pick up a plate looks
    like one deadlift.
 5. **Weight + name:** `weigh.py` sends up to 3 frames from the set, plus the
-   rep measurements, to Claude (`claude-opus-5-5`). It names the lift the way
+   rep measurements, to Claude (Opus, via the `claude` CLI). It names the lift the way
    the log does (Back Squat vs Front Squat, Strict vs Push Press), counts the
    plates, and leaves the weight blank with a note when it can't read them.
 6. **Log:** `logbook.py` writes `logs/YYYY-MM-DD.jsonl` plus the frames. When
@@ -34,8 +34,12 @@ optionally, appended to the workout-log Google Sheet.
 cd gym-tracker
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-export ANTHROPIC_API_KEY=...        # for the plate reading
 ```
+
+The plate reading shells out to the `claude` CLI (Claude Code), so it needs
+`claude` on the PATH and logged in on the machine running the tracker. No API
+key. Each set is one `claude -p` call, about 20-30 s, counted against the
+Claude plan's usage.
 
 The pose model downloads to `models/` on first run.
 
@@ -71,6 +75,8 @@ The code avoids anything Mac-specific so it can move onto the Pi:
   first, since only one process can own the camera).
 - `--model` defaults to `lite` on ARM, `full` elsewhere.
 - Use `--headless`. A systemd unit would make it run whenever the Pi is on.
+- Install Claude Code on the Pi and log in (`claude`, then `/login`) for the
+  plate reading, or run with `--no-weigh`.
 - **Unverified:** whether `mediapipe==0.10.31` installs on the Pi's
   Debian 13 / Python 3.13 (aarch64). Check that first; the fallback is a
   different mediapipe version or running pose on the Mac/NZXT against the stream.

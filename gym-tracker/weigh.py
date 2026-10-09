@@ -5,16 +5,21 @@ Pose tracking only knows the movement family and the rep count. The frames
 saved at each rep go to Claude with that context; it names the lift in the
 same style as Tony's log and counts the plates. Weights are in pounds.
 
-Needs ANTHROPIC_API_KEY (or another credential the SDK can resolve).
+Runs through the `claude` CLI (Claude Code in print mode), so it uses the
+machine's Claude login rather than an API key. Frames go in as image blocks
+over --input-format stream-json; the reply is constrained by --json-schema.
 """
 
 import base64
+import json
+import subprocess
+import tempfile
 from typing import Literal
 
-import anthropic
 from pydantic import BaseModel
 
-MODEL = "claude-opus-5-5"
+MODEL = "opus"   # latest Opus
+CLAUDE_TIMEOUT = 300
 
 # Names already used in the workout log, so new rows line up with old ones.
 KNOWN_EXERCISES = [
@@ -89,9 +94,43 @@ def _pick_frames(frames, n=3):
     return [frames[round(i * step)] for i in range(n)]
 
 
-def read_set(lift_set, client=None):
-    """Returns a SetReading, or raises anthropic.APIError on API failure."""
-    client = client or anthropic.Anthropic()
+# Written out by hand rather than from SetReading.model_json_schema(): the CLI
+# wants a flat schema with additionalProperties: false.
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "exercise": {"type": "string"},
+        "implement": {"type": "string", "enum": ["barbell", "dumbbell", "kettlebell", "machine",
+                                                 "bodyweight", "other", "unclear"]},
+        "bar_weight_lb": {"type": ["number", "null"]},
+        "plates_per_side": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"weight_lb": {"type": "number"}, "count_per_side": {"type": "integer"}},
+            "required": ["weight_lb", "count_per_side"],
+            "additionalProperties": False,
+        }},
+        "total_weight_lb": {"type": ["number", "null"]},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "notes": {"type": "string"},
+    },
+    "required": ["exercise", "implement", "bar_weight_lb", "plates_per_side",
+                 "total_weight_lb", "confidence", "notes"],
+    "additionalProperties": False,
+}
+
+# Keep the session to just this question: no tools, MCP servers, skills,
+# settings/hooks, or saved session. Run from an empty directory so no
+# CLAUDE.md gets picked up.
+CLAUDE_FLAGS = [
+    "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+    "--model", MODEL, "--effort", "high",
+    "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+    "--disable-slash-commands", "--no-session-persistence",
+]
+
+
+def read_set(lift_set, claude="claude"):
+    """Returns a SetReading, or raises RuntimeError if the CLI call fails."""
     content = []
     for jpg in _pick_frames(lift_set.keyframes):
         content.append({
@@ -100,17 +139,25 @@ def read_set(lift_set, client=None):
                        "data": base64.standard_b64encode(jpg).decode()},
         })
     content.append({"type": "text", "text": _describe(lift_set)})
+    message = {"type": "user", "message": {"role": "user", "content": content}}
 
-    response = client.beta.messages.parse(
-        model=MODEL,
-        max_tokens=16000,
-        output_config={"effort": "high"},
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=SYSTEM,
-        messages=[{"role": "user", "content": content}],
-        output_format=SetReading,
-    )
-    if response.stop_reason == "refusal" or response.parsed_output is None:
-        raise RuntimeError(f"No reading for set {lift_set.id} (stop_reason={response.stop_reason})")
-    return response.parsed_output
+    with tempfile.TemporaryDirectory() as cwd:
+        proc = subprocess.run(
+            [claude, *CLAUDE_FLAGS, "--system-prompt", SYSTEM, "--json-schema", json.dumps(SCHEMA)],
+            input=json.dumps(message) + "\n", capture_output=True, text=True,
+            cwd=cwd, timeout=CLAUDE_TIMEOUT,
+        )
+
+    result = None
+    for line in proc.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "result":
+            result = event
+    if result is None:
+        raise RuntimeError(f"claude exited {proc.returncode} with no result: {proc.stderr.strip()[:300]}")
+    if result.get("is_error") or result.get("structured_output") is None:
+        raise RuntimeError(f"No reading for set {lift_set.id}: {result.get('subtype')} {str(result.get('result'))[:300]}")
+    return SetReading.model_validate(result["structured_output"])
