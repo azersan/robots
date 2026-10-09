@@ -54,12 +54,23 @@ actually performing the lift, set real_set to false and say what you see in \
 the notes. A rejected set is kept out of the workout log and off the garage \
 display; a real set shows on the display as reps x weight.
 
+The gym's equipment (Tony's garage), per side of the bar:
+- Full-size bumper plates (REP Fitness): two blue 45 lb, one green 25 lb, one \
+gray 10 lb.
+- Small change plates: one blue 5 lb, one green 2.5 lb, one white 1.25 lb. These \
+sit outside the bumpers and show as a smaller colored disc against the bumper's \
+face, which can look like a colored hub; the bumpers' own hubs are not colored.
+- Same colors, different plates: a full-size green disc is the 25, a small one \
+is the 2.5; a full-size blue disc is a 45, a small one is the 5. Use size.
+- Both sides are always loaded the same, so when the far side is hidden, assume \
+it matches the near side.
+- The barbell is a standard 45 lb Olympic bar.
+Every load is therefore 45 + 2 x (plates on one side), using only the plates \
+above.
+
 Conventions for the log:
-- Weights are pounds. A standard Olympic barbell is 45 lb unless the frames show \
-otherwise (e.g. a 35 lb bar, EZ bar, trap bar). Bumper plates are often color-coded \
-(red 55, blue 45, yellow 35, green 25, white 10 in lb sets; kg sets use the same \
-colors for 25/20/15/10/5 kg), but read markings or sizes over colors when you can, \
-and convert kg to lb.
+- Weights are pounds. Read markings when you can; otherwise use the equipment \
+list above to identify plates by color and size.
 - For dumbbells or kettlebells, the total is the weight of one implement.
 - For bodyweight work, implement is "bodyweight" and the total is null.
 - Name the exercise the way the existing log does when one fits."""

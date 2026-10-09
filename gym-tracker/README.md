@@ -25,7 +25,10 @@ Pi setup and rebuild: [`../raspi-camera/pi-5/SETUP.md`](../raspi-camera/pi-5/SET
 5. **Weight + name:** `weigh.py` sends up to 3 frames from the set, plus the
    rep measurements, to Claude (Opus, via the `claude` CLI). It names the lift the way
    the log does (Back Squat vs Front Squat, Strict vs Push Press), counts the
-   plates, and leaves the weight blank with a note when it can't read them.
+   plates, and leaves the weight blank with a note when it can't read them. The
+   garage's plate inventory (colors, sizes, counts per side; 45 lb bar; both
+   sides always loaded the same) is in `SYSTEM` in `weigh.py`: update it when
+   the equipment changes. Claude can also reject a "set" that wasn't lifting.
 6. **Log:** `logbook.py` writes `logs/YYYY-MM-DD.jsonl` plus the frames. When
    nobody has been in frame for `--absent-timeout` (default 60 s), the session
    ends: it prints a summary and, with `--sheet`, appends rows to the sheet
