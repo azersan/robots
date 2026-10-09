@@ -42,7 +42,8 @@ Claude has read the plates, `5 X 185` (pounds), green if confident, yellow
 otherwise, or a yellow `5 X ?` if the weight couldn't be read.
 
 Normal display (set 2026-10-09): only the Time app is enabled (Date and Battery
-off, so nothing rotates), 12-hour time, US date order, Fahrenheit, weekday bar
+off, so nothing rotates), New York time (`PUT /api/v1/system` with `tzName` +
+POSIX `tz`; it shipped on Berlin), 12-hour time, US date order, Fahrenheit, weekday bar
 starting Sunday. Change it in the clock's web UI at `http://192.168.4.37/` or via
 `PATCH /api/v1/settings` and `PUT /api/v1/apps/order`
 (`{"order": ["Time"], "disabled": ["Date", "Battery"]}`).
