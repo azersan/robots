@@ -45,6 +45,13 @@ compiler (heightfield, drift report, USD/MJCF), and `sim-playground/tools/import
 `sim-playground/terrain/anna_pl.npz` for the `anna_pl_scan` scene. Workflow and scanning tips:
 `scan-to-sim/README.md`.
 
+## Gym Tracker
+
+`gym-tracker/` counts reps and sets from the camera and reads the weight off the plates (MediaPipe Pose for
+reps, Claude vision for the plates and the exact lift name), logging to JSONL and optionally Tony's workout-log
+Google Sheet. Runs on the Mac against the Pi stream for now; it's meant to move onto the Pi (`-s picamera`).
+Own venv (`gym-tracker/.venv`). See `gym-tracker/README.md`.
+
 ## Key Files
 
 **Pi 5-side (`raspi-camera/pi-5/`, deploy to Pi home dir via SSH):**

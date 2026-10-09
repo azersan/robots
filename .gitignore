@@ -7,3 +7,8 @@ __pycache__/
 # App screenshots saved to the working dir (test_data screenshots ARE tracked)
 /raspi-camera/*_screenshot_*.jpg
 /raspi-camera/screenshot_*.jpg
+
+# gym-tracker: local venv, downloaded models, session logs + frames
+/gym-tracker/.venv/
+/gym-tracker/models/
+/gym-tracker/logs/

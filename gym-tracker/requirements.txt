@@ -1,0 +1,8 @@
+# Pinned to match raspi-camera/ (mediapipe changes APIs often).
+opencv-python==4.12.0.88
+numpy==2.0.2
+mediapipe==0.10.31
+# Claude plate reading (weigh.py). 1.x needs Python >= 3.10.
+anthropic>=1.12,<2
+pydantic>=2
+pytest
