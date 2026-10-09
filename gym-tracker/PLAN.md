@@ -61,6 +61,15 @@ Motors are out of scope. The Pi is just a camera here.
 
 ## Next steps
 
+- **Bar-on-back squats (open, 2026-10-09):** five back squats under the bar
+  counted nothing, and the tracker decided nobody was in frame at 12:56 while
+  they were happening. With the bar at squat height, the far plate sits where
+  the head and shoulders are, and both the squat signal (shoulder drop) and
+  the "is someone here" check depend on the shoulders. Bodyweight squats and
+  presses count. Next session's clip + CSV (logs/clips on the Pi, added for
+  this) will show what's visible; likely fix is a hip-based squat signal and
+  a person check that tolerates hidden shoulders.
+
 0. **Camera placement is fixed** (Tony, 2026-10-09: no flexibility on where it
    goes). It looks along the bar from close to the rack, so the software has to
    cope: plates are read from frames with the bar at rest just before/after a
