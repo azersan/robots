@@ -41,12 +41,15 @@ shows the live count (`SQUAT 3`, `DL 5`); when the set ends, `5 REPS`; once
 Claude has read the plates, `5 X 185` (pounds), green if confident, yellow
 otherwise, or a yellow `5 X ?` if the weight couldn't be read.
 
-Normal display (set 2026-10-09): only the Time app is enabled (Date and Battery
-off, so nothing rotates), New York time (`PUT /api/v1/system` with `tzName` +
-POSIX `tz`; it shipped on Berlin), 12-hour time, US date order, Fahrenheit, weekday bar
-starting Sunday. Change it in the clock's web UI at `http://192.168.4.37/` or via
-`PATCH /api/v1/settings` and `PUT /api/v1/apps/order`
-(`{"order": ["Time"], "disabled": ["Date", "Battery"]}`).
+Normal display: the clock's only app is `TimeBat` (`clock/timebat.be`), a Berry
+script that runs on the clock and draws the time in the clock's own large digits
+(read off its screen; this build only gives scripts small fonts) with a blinking
+colon, plus a battery gauge at the right edge (green > 50 %, yellow > 20 %, red).
+The built-in Time, Date and Battery apps are disabled, so nothing rotates.
+`clock/install.sh` reinstalls it. Clock settings: New York time
+(`PUT /api/v1/system` with `tzName` + POSIX `tz`; it shipped on Berlin),
+12-hour time, US date order, Fahrenheit. Change them in the web UI at
+`http://192.168.4.37/` or with `PATCH /api/v1/settings`.
 
 Each update is a notification named `gym` that replaces the previous one. The
 panel fits 52 pixels of AWTRIX's double-size font (most characters 6 px plus a
