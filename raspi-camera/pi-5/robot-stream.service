@@ -1,0 +1,19 @@
+# Camera stream for the gym tracker: robot_server.py with motors off, at boot.
+# Install on the Pi:
+#   sudo cp robot-stream.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now robot-stream
+# Logs: journalctl -u robot-stream -f
+[Unit]
+Description=Pi camera MJPEG stream (robot_server.py, no motors)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tazersky
+WorkingDirectory=/home/tazersky/robot
+ExecStart=/usr/bin/python3 robot_server.py --no-motors -r 1280x720
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

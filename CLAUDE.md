@@ -54,7 +54,7 @@ Own venv (`gym-tracker/.venv`). See `gym-tracker/README.md`.
 
 ## Key Files
 
-**Pi 5-side (`raspi-camera/pi-5/`, deploy to Pi home dir via SSH):**
+**Pi 5-side (`raspi-camera/pi-5/`, deploy to `~/robot/` on the Pi via SSH):**
 - `robot_server.py` - **Primary server.** Combined Flask app: MJPEG stream + motor control (`/drive`, `/tank`, `/stop`, `/health`) on port 8080, with an idle watchdog. One shared capture/encode thread feeds all stream clients. Speed commands are -1..1 and mapped past the ESC deadband (~80µs), so small speeds actually move; `/drive` supports reverse. Replaces `stream.py`.
 - `motors.py` - `MotorController` (lgpio PWM). Importable module + interactive `w/a/s/d` test. Has per-motor balance trim.
 - `stream.py` - Stream-only MJPEG server (superseded by `robot_server.py`).
@@ -86,6 +86,10 @@ occasionally flaky over WiFi — if it won't resolve, find the current IP via AR
 with `ssh-keygen -R <ip>`.
 
 ### Start Server (on Pi)
+The Pi runs the stream at boot as the `robot-stream` systemd service (`raspi-camera/pi-5/robot-stream.service`:
+`robot_server.py --no-motors -r 1280x720` from `~/robot`). Stop it (`sudo systemctl stop robot-stream`) before
+running robot_server.py by hand or anything else that needs the camera. Logs: `journalctl -u robot-stream -f`.
+
 ```bash
 # Combined stream + motor control (run in Pi home dir; needs motors.py alongside)
 python3 robot_server.py                 # MJPEG + control on port 8080
