@@ -58,7 +58,10 @@ class Logbook:
         path = os.path.join(self.log_dir, started.strftime("%Y-%m-%d") + ".jsonl")
         with open(path, "a") as f:
             f.write(json.dumps(rec) + "\n")
-        if not rec["rejected"]:
+        # Only sets Claude has looked at and confirmed go to the sheet. Without a
+        # reading (CLI not logged in, timed out) nothing has checked that the set
+        # was real, so it stays in the JSONL only.
+        if reading is not None and not rec["rejected"]:
             self.session.append(rec)
         return rec
 
@@ -70,9 +73,7 @@ class Logbook:
             weight = "" if weight is None else f"{weight:g}"
             reading = rec["reading"] or {}
             notes = ["auto-logged"]
-            if not reading:
-                notes.append("weight not read")
-            elif reading.get("confidence") != "high":
+            if reading.get("confidence") != "high":
                 notes.append(f"{reading.get('confidence')} confidence")
             key = (rec["date"], rec["exercise"], weight, str(rec["reps"]))
             if rows and tuple(rows[-1][:4]) == key:
